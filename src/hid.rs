@@ -338,10 +338,16 @@ impl HidDevice {
 #[cfg(target_os = "windows")]
 struct HidProxy {
     request_lock: Mutex<()>,
-    child: Mutex<Child>,
-    stdin: Mutex<ChildStdin>,
-    rx: Mutex<mpsc::Receiver<String>>,
+    process: Mutex<Option<HidProxyProcess>>,
+    device_json: String,
     transport: HidTransport,
+}
+
+#[cfg(target_os = "windows")]
+struct HidProxyProcess {
+    child: Child,
+    stdin: ChildStdin,
+    rx: mpsc::Receiver<String>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -405,12 +411,10 @@ struct ProxyResponse {
 }
 
 #[cfg(target_os = "windows")]
-impl Drop for HidProxy {
+impl Drop for HidProxyProcess {
     fn drop(&mut self) {
-        if let Ok(child) = self.child.get_mut() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -609,61 +613,15 @@ impl HidDevice {
 
     #[cfg(target_os = "windows")]
     fn open_proxy_for(device: &crate::device::Device) -> Result<Self> {
-        let exe = std::env::current_exe().context("Failed to find Entropy executable")?;
         let device_json =
             serde_json::to_string(device).context("Failed to serialize HID device")?;
-        let mut child = Command::new(exe)
-            .arg("--entropy-hid-proxy")
-            .arg(device_json)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .context("Failed to start HID helper")?;
-
-        let stdin = child.stdin.take().context("HID helper stdin unavailable")?;
-        let stdout = child
-            .stdout
-            .take()
-            .context("HID helper stdout unavailable")?;
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                match line {
-                    Ok(line) => {
-                        if tx.send(line).is_err() {
-                            break;
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-
-        let ready_line = match rx.recv_timeout(Duration::from_secs(12)) {
-            Ok(line) => line,
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                bail!("HID helper timed out while opening device");
-            }
-        };
-        let ready: ProxyResponse = serde_json::from_str(&ready_line)
-            .context("HID helper returned malformed startup response")?;
-        if !ready.ok {
-            let _ = child.kill();
-            let _ = child.wait();
-            bail!(ready
-                .error
-                .unwrap_or_else(|| "HID helper failed to open device".to_owned()));
-        }
+        let process = spawn_hid_proxy_process(&device_json)?;
 
         Ok(Self {
             backend: HidBackend::Proxy(std::sync::Arc::new(HidProxy {
                 request_lock: Mutex::new(()),
-                child: Mutex::new(child),
-                stdin: Mutex::new(stdin),
-                rx: Mutex::new(rx),
+                process: Mutex::new(Some(process)),
+                device_json,
                 transport: device_transport(device),
             })),
         })
@@ -1710,40 +1668,65 @@ impl HidProxy {
         }
     }
 
-    fn kill_child(&self) {
-        if let Ok(mut child) = self.child.lock() {
-            let _ = child.kill();
-            let _ = child.try_wait();
-        }
-    }
-
     fn request(&self, request: &str) -> Result<String> {
         let _request_guard = self
             .request_lock
             .lock()
             .map_err(|_| anyhow::anyhow!("HID helper request lock poisoned"))?;
-        {
-            let mut stdin = self
-                .stdin
-                .lock()
-                .map_err(|_| anyhow::anyhow!("HID helper stdin lock poisoned"))?;
-            writeln!(stdin, "{request}").context("Failed to write HID helper request")?;
-            stdin
-                .flush()
-                .context("Failed to flush HID helper request")?;
+        let mut process = self
+            .process
+            .lock()
+            .map_err(|_| anyhow::anyhow!("HID helper process lock poisoned"))?;
+        if process.is_none() {
+            *process = Some(
+                spawn_hid_proxy_process(&self.device_json)
+                    .context("Failed to restart HID helper")?,
+            );
+            log::info!("Restarted Windows HID helper before command");
         }
 
-        let rx = self
+        let write_result = (|| -> Result<()> {
+            let proxy = process.as_mut().expect("HID helper process initialized");
+            writeln!(proxy.stdin, "{request}").context("Failed to write HID helper request")?;
+            proxy
+                .stdin
+                .flush()
+                .context("Failed to flush HID helper request")
+        })();
+        if let Err(error) = write_result {
+            *process = None;
+            return Err(error);
+        }
+
+        let response = process
+            .as_ref()
+            .expect("HID helper process initialized")
             .rx
-            .lock()
-            .map_err(|_| anyhow::anyhow!("HID helper receiver lock poisoned"))?;
-        match rx.recv_timeout(self.command_timeout()) {
+            .recv_timeout(self.command_timeout());
+        match response {
             Ok(line) => Ok(line),
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                self.kill_child();
-                bail!("HID helper timed out during command");
+                // The child can be stuck in a Windows HID call. Kill it first
+                // so the replacement can claim the same device immediately.
+                *process = None;
+                match spawn_hid_proxy_process(&self.device_json) {
+                    Ok(restarted) => {
+                        *process = Some(restarted);
+                        log::warn!(
+                            "Windows HID helper timed out; restarted helper for the next command"
+                        );
+                        bail!("HID helper timed out during command; helper restarted");
+                    }
+                    Err(restart_error) => {
+                        bail!(
+                            "HID helper timed out during command; failed to restart helper: \
+                             {restart_error:#}"
+                        );
+                    }
+                }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
+                *process = None;
                 bail!("HID helper disconnected during command");
             }
         }
@@ -1797,6 +1780,75 @@ impl HidProxy {
         }
         Ok(())
     }
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_hid_proxy_process(device_json: &str) -> Result<HidProxyProcess> {
+    let exe = std::env::current_exe().context("Failed to find Entropy executable")?;
+    let mut child = Command::new(exe)
+        .arg("--entropy-hid-proxy")
+        .arg(device_json)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("Failed to start HID helper")?;
+
+    let stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("HID helper stdin unavailable");
+        }
+    };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("HID helper stdout unavailable");
+        }
+    };
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            match line {
+                Ok(line) => {
+                    if tx.send(line).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let ready_line = match rx.recv_timeout(Duration::from_secs(12)) {
+        Ok(line) => line,
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("HID helper timed out while opening device");
+        }
+    };
+    let ready: ProxyResponse = match serde_json::from_str(&ready_line) {
+        Ok(ready) => ready,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error).context("HID helper returned malformed startup response");
+        }
+    };
+    if !ready.ok {
+        let _ = child.kill();
+        let _ = child.wait();
+        bail!(ready
+            .error
+            .unwrap_or_else(|| "HID helper failed to open device".to_owned()));
+    }
+
+    Ok(HidProxyProcess { child, stdin, rx })
 }
 
 #[cfg(target_os = "windows")]
