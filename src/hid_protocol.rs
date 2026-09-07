@@ -41,7 +41,7 @@ pub(super) const ERGOHAVEN_BATTERY_HALVES_VERSION: u8 = 0x01;
 // Vial sub-commands (used after CMD_VIA_VIAL_PREFIX)
 pub(super) const CMD_VIAL_GET_KEYBOARD_ID: u8 = 0x00;
 pub(super) const CMD_VIAL_GET_SIZE: u8 = 0x01;
-pub(super) const CMD_VIAL_GET_DEFINITION: u8 = 0x02;
+pub(crate) const CMD_VIAL_GET_DEFINITION: u8 = 0x02;
 pub(crate) const CMD_VIAL_GET_ENCODER: u8 = 0x03;
 pub(super) const CMD_VIAL_SET_ENCODER: u8 = 0x04;
 pub(super) const CMD_VIAL_GET_UNLOCK_STATUS: u8 = 0x05;
@@ -65,12 +65,13 @@ pub(super) const DYNAMIC_VIAL_ALT_REPEAT_KEY_SET: u8 = 0x08;
 pub(super) const BUFFER_FETCH_CHUNK: usize = 28;
 
 /// These successful Vial replies carry only the requested value, not the
-/// encoder index or QSID. A transport therefore cannot distinguish a late
-/// reply to the previous request from the reply to the current one.
+/// definition block, encoder index, or QSID. A transport therefore cannot
+/// distinguish a late reply to the previous request from the reply to the
+/// current one.
 pub(crate) fn vial_reply_is_uncorrelated(command: &[u8]) -> bool {
     command.first() == Some(&CMD_VIA_VIAL_PREFIX)
         && matches!(
             command.get(1),
-            Some(&CMD_VIAL_GET_ENCODER | &CMD_VIAL_QMK_SETTINGS_GET)
+            Some(&CMD_VIAL_GET_DEFINITION | &CMD_VIAL_GET_ENCODER | &CMD_VIAL_QMK_SETTINGS_GET)
         )
 }

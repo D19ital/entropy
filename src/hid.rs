@@ -1496,10 +1496,11 @@ fn read_response_via_input_report(
 ) -> Result<[u8; MSG_LEN]> {
     let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms.max(1) as u64);
 
-    // QMK_SETTINGS_GET and GET_ENCODER replies do not identify their request.
-    // A single interval can therefore return the preceding value and shift a
-    // sequence of settings (for example left module -> right module). Give
-    // those commands the same four-interval freshness window as direct GATT.
+    // Definition pages, QMK_SETTINGS_GET, and GET_ENCODER replies do not
+    // identify their request. A single interval can therefore return the
+    // preceding value and shift a sequence of pages or settings (for example
+    // left module -> right module). Give those commands the same four-interval
+    // freshness window as direct GATT.
     std::thread::sleep(linux_ble_input_report_settle(command));
 
     loop {
@@ -2285,7 +2286,7 @@ mod tests {
         command[1] = CMD_VIAL_GET_DEFINITION;
         assert_eq!(
             linux_ble_input_report_settle(&command),
-            WINDOWS_BLE_SETTLE_DELAY
+            LINUX_BLE_UNCORRELATED_REPLY_SETTLE
         );
     }
 
