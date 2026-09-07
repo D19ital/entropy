@@ -3,7 +3,7 @@ use crate::firmware::FirmwareProtocol;
 use crate::hid::hid_protocol::vial_reply_is_uncorrelated;
 #[cfg(test)]
 use crate::hid::hid_protocol::{
-    CMD_VIAL_GET_ENCODER, CMD_VIAL_QMK_SETTINGS_GET, CMD_VIA_VIAL_PREFIX,
+    CMD_VIAL_GET_DEFINITION, CMD_VIAL_GET_ENCODER, CMD_VIAL_QMK_SETTINGS_GET, CMD_VIA_VIAL_PREFIX,
 };
 use anyhow::{bail, Context, Result};
 use futures_lite::{future, StreamExt};
@@ -41,10 +41,11 @@ const BLUEZ_REPLY_TIMEOUT: Duration = Duration::from_millis(2_500);
 // and keymap request. One connection interval is enough; a response that is
 // not ready yet is rejected by `response_matches` and retried safely.
 const BLUEZ_REPLY_POLL_INTERVAL: Duration = Duration::from_millis(8);
-// GET_ENCODER and QMK_SETTINGS_GET do not echo an identifier in successful
-// replies. BlueZ may therefore surface the previous characteristic value or a
-// late notification before RMK has processed the new request. Give every reply
-// path four 7.5 ms connection intervals to become fresh.
+// Definition pages, GET_ENCODER, and QMK_SETTINGS_GET do not echo an identifier
+// in successful replies. BlueZ may therefore surface the previous
+// characteristic value or a late notification before RMK has processed the
+// new request. Give every reply path four 7.5 ms connection intervals to
+// become fresh.
 const BLUEZ_UNCORRELATED_REPLY_SETTLE: Duration = Duration::from_millis(32);
 
 fn reply_settle_for_command(data: &[u8]) -> Duration {
@@ -1351,6 +1352,12 @@ mod tests {
         );
 
         command[1] = CMD_VIAL_QMK_SETTINGS_GET;
+        assert_eq!(
+            reply_settle_for_command(&command),
+            BLUEZ_UNCORRELATED_REPLY_SETTLE
+        );
+
+        command[1] = CMD_VIAL_GET_DEFINITION;
         assert_eq!(
             reply_settle_for_command(&command),
             BLUEZ_UNCORRELATED_REPLY_SETTLE
