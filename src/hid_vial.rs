@@ -120,9 +120,19 @@ impl HidDevice {
         Ok(())
     }
 
-    /// Poll unlock status — returns (unlocked, in_progress)
-    /// Returns (unlocked, in_progress, counter)
-    pub fn unlock_poll(&self) -> Result<(bool, bool, u8)> {
+    /// Poll unlock status.
+    ///
+    /// Returns `(unlocked, in_progress, counter, is_rmk)`. RMK uses the
+    /// counter as the number of missing combo keys, while Vial/QMK starts at
+    /// 50 and decrements it over time. During the application-side RMK hold
+    /// period, every successful sample is immediately re-locked so a short
+    /// tap cannot leave the keyboard unlocked.
+    pub fn unlock_poll(
+        &self,
+        known_rmk: Option<bool>,
+        unlock_key_count: u8,
+        keep_rmk_locked: bool,
+    ) -> Result<(bool, bool, u8, bool)> {
         let resp = self
             .usb_send(&[CMD_VIA_VIAL_PREFIX, CMD_VIAL_UNLOCK_POLL])
             .context("failed to poll Vial unlock status")?;
@@ -131,11 +141,33 @@ impl HidDevice {
         let mut in_progress = resp[1] == 1;
         let counter = resp[2];
 
-        // RMK 0.8.x samples `unlocked` and `in_progress` before checking the
-        // physical keys. Its successful poll can therefore return (0, 1, 0),
-        // even though the lock transitions while producing that reply.
-        // Confirm the resulting state without issuing another UNLOCK_POLL,
-        // which would restart RMK's in-progress flag.
+        // The first QMK poll is 49 or 50. RMK reports only how many of the
+        // configured unlock keys are missing, so its value cannot exceed the
+        // number of keys. Latch the result in the UI after this first sample.
+        let is_rmk = known_rmk.unwrap_or(counter <= unlock_key_count.max(1));
+
+        if is_rmk {
+            if keep_rmk_locked || counter > 0 {
+                // RMK unlocks as soon as a poll observes every combo key. Keep
+                // the real firmware lock engaged until the UI has observed a
+                // continuous three-second hold. A released key also restarts
+                // the sequence from a known locked state.
+                self.lock()
+                    .context("failed to keep RMK locked during unlock hold")?;
+                self.unlock_start()
+                    .context("failed to restart RMK unlock hold")?;
+                return Ok((false, true, counter, true));
+            }
+
+            // `check_unlock()` runs after RMK fills the response, so counter 0
+            // is the authoritative successful sample even if the returned
+            // unlocked bit still contains the previous value.
+            return Ok((true, false, counter, true));
+        }
+
+        // Some Vial-compatible firmware samples `unlocked` and `in_progress`
+        // before checking the physical keys. Confirm a zero-counter response
+        // without issuing another UNLOCK_POLL, which could restart its state.
         if in_progress && counter == 0 {
             let (confirmed_unlocked, confirmed_in_progress, _) =
                 self.get_unlock_status_with_progress()?;
@@ -143,7 +175,7 @@ impl HidDevice {
             in_progress = confirmed_in_progress;
         }
 
-        Ok((unlocked, in_progress, counter))
+        Ok((unlocked, in_progress, counter, false))
     }
 
     /// Lock the keyboard
