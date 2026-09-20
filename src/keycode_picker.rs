@@ -1526,7 +1526,8 @@ impl KeycodePicker {
                 for tab in &visible_tabs {
                     let active = self.selected_tab == *tab;
                     let tab_label = picker_tab_label(self.language, *tab);
-                    if picker_tab_button(ui, tab_label, active).clicked() {
+                    let tint = picker_tab_tint(*tab, ui.visuals().dark_mode);
+                    if picker_tab_button(ui, tab.glyph(), tab_label, tint, active).clicked() {
                         if self.selected_tab != *tab {
                             if *tab == KeycodeTab::Macro {
                                 self.macro_inline_selected = None;

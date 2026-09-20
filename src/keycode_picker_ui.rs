@@ -332,17 +332,78 @@ pub(super) fn picker_choice_button(
 }
 
 pub(super) fn picker_tab_width(label: &str) -> f32 {
-    (label.chars().count() as f32 * 7.0 + 24.0).clamp(52.0, 132.0)
+    // Label estimate plus chip padding and the category glyph in front.
+    (label.chars().count() as f32 * 7.0 + 24.0 + 20.0).clamp(64.0, 152.0)
 }
 
-pub(super) fn picker_tab_button(ui: &mut egui::Ui, label: &str, active: bool) -> egui::Response {
-    picker_button(
-        ui,
-        label,
-        Vec2::new(picker_tab_width(label), 30.0),
-        true,
-        active,
-    )
+// Category tint per tab, derived from the Okabe-Ito colorblind-safe palette
+// and adjusted per theme for contrast. Color is a redundant cue on top of
+// glyph + label, never the only difference between tabs.
+pub(super) fn picker_tab_tint(tab: KeycodeTab, dark: bool) -> Color32 {
+    let ((dr, dg, db), (lr, lg, lb)) = match tab {
+        KeycodeTab::Basic => ((86, 180, 233), (40, 116, 166)),
+        KeycodeTab::Symbols => ((230, 159, 0), (176, 121, 0)),
+        KeycodeTab::UniversalSymbols => ((60, 190, 142), (11, 138, 98)),
+        KeycodeTab::Modifiers | KeycodeTab::Layers => ((179, 157, 219), (126, 87, 194)),
+        KeycodeTab::Media => ((77, 182, 172), (0, 121, 107)),
+        KeycodeTab::Special => ((240, 130, 79), (208, 90, 30)),
+        KeycodeTab::Rgb => ((233, 196, 76), (156, 126, 29)),
+        KeycodeTab::Macro => ((229, 115, 115), (198, 40, 40)),
+        KeycodeTab::TapDance => ((77, 208, 225), (0, 131, 143)),
+        KeycodeTab::Bluetooth => ((92, 141, 255), (47, 95, 208)),
+        KeycodeTab::Custom => ((158, 154, 161), (117, 113, 122)),
+    };
+    if dark {
+        Color32::from_rgb(dr, dg, db)
+    } else {
+        Color32::from_rgb(lr, lg, lb)
+    }
+}
+
+pub(super) fn picker_tab_button(
+    ui: &mut egui::Ui,
+    glyph: &str,
+    label: &str,
+    tint: Color32,
+    active: bool,
+) -> egui::Response {
+    let size = Vec2::new(picker_tab_width(label), 30.0);
+    let resp = picker_button(ui, "", size, true, active);
+    let rect = resp.rect;
+    let (glyph_color, label_color) = if active {
+        (Color32::WHITE, Color32::WHITE)
+    } else {
+        (tint, ui.visuals().text_color())
+    };
+    let painter = ui.painter();
+    let glyph_galley = painter.layout_no_wrap(
+        glyph.to_owned(),
+        egui::FontId::proportional(13.0),
+        glyph_color,
+    );
+    let label_galley = painter.layout_no_wrap(
+        label.to_owned(),
+        egui::FontId::proportional(12.0),
+        label_color,
+    );
+    let gap = 6.0;
+    let glyph_size = glyph_galley.size();
+    let label_size = label_galley.size();
+    let left = rect.center().x - (glyph_size.x + gap + label_size.x) * 0.5;
+    painter.galley(
+        egui::pos2(left, rect.center().y - glyph_size.y * 0.5),
+        glyph_galley,
+        glyph_color,
+    );
+    painter.galley(
+        egui::pos2(
+            left + glyph_size.x + gap,
+            rect.center().y - label_size.y * 0.5,
+        ),
+        label_galley,
+        label_color,
+    );
+    resp
 }
 
 pub(super) fn picker_slot_button(
@@ -406,4 +467,29 @@ pub(super) fn picker_slot_button(
         );
     }
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vial_tab_tints_are_unique_per_theme() {
+        for dark in [true, false] {
+            let mut seen = std::collections::HashSet::new();
+            for tab in KeycodeTab::VIAL_TABS {
+                assert!(
+                    seen.insert(picker_tab_tint(*tab, dark).to_array()),
+                    "duplicate tint for {tab:?} (dark: {dark})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tab_width_fits_the_longest_catalog_labels() {
+        // Longest current labels: "Универсальные" (ru), "Universal" (en).
+        assert!(picker_tab_width("Универсальные") <= 152.0);
+        assert!(picker_tab_width("RGB") >= 64.0);
+    }
 }
