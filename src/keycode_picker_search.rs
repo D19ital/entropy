@@ -92,6 +92,7 @@ impl KeycodePicker {
         self.collect_special_entries(&mut corpus);
         self.collect_macro_slot_entries(&mut corpus);
         self.collect_tap_dance_slot_entries(&mut corpus);
+        self.collect_universal_symbol_entries(&mut corpus);
 
         let mut results: Vec<SearchEntry> = Vec::new();
         for entry in corpus {
@@ -221,6 +222,41 @@ impl KeycodePicker {
         }
     }
 
+    /// Universal Symbols (native RMK actions): layout controls, punctuation,
+    /// and Russian letters when the firmware supports them.
+    fn collect_universal_symbol_entries(&self, out: &mut Vec<SearchEntry>) {
+        if !self.universal_symbols_available() {
+            return;
+        }
+        let push = |out: &mut Vec<SearchEntry>, user_id: u8, name: String| {
+            let binding = crate::universal_symbols::binding(user_id);
+            let Some(label) = crate::universal_symbols::label_for_user_id(user_id) else {
+                return;
+            };
+            let crate::keyboard::KeyBinding::Rmk(action) = binding else {
+                return;
+            };
+            let tooltip = crate::universal_symbols::tooltip(action).unwrap_or_default();
+            out.push(SearchEntry {
+                binding,
+                label,
+                name,
+                tooltip: crate::i18n::tr_text(self.language, &tooltip),
+            });
+        };
+        for control in crate::universal_symbols::CONTROLS {
+            push(out, control.user_id, control.name.to_string());
+        }
+        for symbol in crate::universal_symbols::SYMBOLS {
+            push(out, symbol.user_id, symbol.symbol.to_string());
+        }
+        if self.universal_russian_letters_available() {
+            for letter in crate::universal_symbols::RUSSIAN_LETTERS {
+                push(out, letter.user_id, letter.letter.to_string());
+            }
+        }
+    }
+
     // ── Results UI ──
 
     pub(super) fn show_vial_search_results(&mut self, ui: &mut egui::Ui) {
@@ -309,6 +345,36 @@ mod tests {
         picker.search.query.clear();
         picker.refresh_vial_search_results();
         assert!(picker.search.results().is_empty());
+    }
+
+    #[test]
+    fn finds_universal_symbols_when_firmware_supports_them() {
+        let mut picker = KeycodePicker {
+            supports_universal_symbols: true,
+            supports_rmk_native_key_actions: true,
+            rmk_native_key_actions_allowed_for_target: true,
+            supports_universal_russian_letters: true,
+            ..Default::default()
+        };
+        picker.search.query = "universal".into();
+        picker.refresh_vial_search_results();
+        let sync = crate::universal_symbols::binding(crate::universal_symbols::USER_SYNC);
+        let ru_letter = crate::universal_symbols::binding(
+            crate::universal_symbols::USER_RUSSIAN_LETTER_START,
+        );
+        assert!(picker.search.results().iter().any(|hit| hit.binding == sync));
+        assert!(picker.search.results().iter().any(|hit| hit.binding == ru_letter));
+
+        // Without RMK actions allowed for the target, universal entries vanish.
+        let mut gated = KeycodePicker {
+            supports_universal_symbols: true,
+            supports_rmk_native_key_actions: true,
+            rmk_native_key_actions_allowed_for_target: false,
+            ..Default::default()
+        };
+        gated.search.query = "universal".into();
+        gated.refresh_vial_search_results();
+        assert!(!gated.search.results().iter().any(|hit| hit.binding == sync));
     }
 
     #[test]
