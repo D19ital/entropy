@@ -14,6 +14,9 @@ pub use keycode_picker_keyboard::egui_key_to_qmk;
 #[path = "keycode_picker_model.rs"]
 mod keycode_picker_model;
 pub use keycode_picker_model::{BasicPickerLayout, KeycodeTab, PickerViewMode};
+#[path = "keycode_picker_search.rs"]
+mod keycode_picker_search;
+use keycode_picker_search::*;
 #[path = "keycode_picker_ui.rs"]
 mod keycode_picker_ui;
 use keycode_picker_ui::*;
@@ -132,7 +135,8 @@ pub struct KeycodePicker {
     pub selected_tab: KeycodeTab,
     pub basic_layout: BasicPickerLayout,
     pub popup_view_mode: PickerViewMode,
-    pub search_query: String,
+    /// Search field state and cached results (keycode_picker_search.rs).
+    search: PickerSearch,
     pub result: Option<crate::keyboard::KeyBinding>,
     pub custom_keycodes: Vec<(String, String, String, u16)>,
     pub supports_rgb: bool,
@@ -214,6 +218,67 @@ fn tr_picker(language: crate::i18n::Language, key: &'static str) -> &'static str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escape_mid_search_closes_the_picker_and_keeps_it_closed() {
+        let mut picker = KeycodePicker {
+            open: true,
+            ..Default::default()
+        };
+        picker.search.query = "tap dan".into();
+        let mut harness = egui_kittest::Harness::new_state(
+            |ctx, picker: &mut KeycodePicker| {
+                picker.show(
+                    ctx,
+                    DeferredPickerDataState::Ready,
+                    DeferredPickerDataState::Ready,
+                );
+            },
+            picker,
+        );
+        harness.run();
+        assert!(harness.state().open, "picker should be showing before Esc");
+
+        harness.key_press(egui::Key::Escape);
+        harness.run();
+        assert!(
+            !harness.state().open,
+            "Esc during search must close the picker"
+        );
+
+        // A ghost reopen on the next frames is exactly the reported bug.
+        harness.run_steps(3);
+        assert!(!harness.state().open, "picker must stay closed");
+    }
+
+    #[test]
+    fn escape_in_pending_modifier_pick_closes_the_whole_picker() {
+        let picker = KeycodePicker {
+            open: true,
+            vial_quantum_pending_mod: Some(0x0100),
+            ..Default::default()
+        };
+        let mut harness = egui_kittest::Harness::new_state(
+            |ctx, picker: &mut KeycodePicker| {
+                picker.show(
+                    ctx,
+                    DeferredPickerDataState::Ready,
+                    DeferredPickerDataState::Ready,
+                );
+            },
+            picker,
+        );
+        harness.run();
+        harness.key_press(egui::Key::Escape);
+        harness.run();
+        assert!(harness.state().vial_quantum_pending_mod.is_none());
+        assert!(
+            !harness.state().open,
+            "Esc in the pending pick closes the whole picker, same as the layer pick"
+        );
+        harness.run_steps(3);
+        assert!(!harness.state().open, "picker must stay closed");
+    }
 
     fn macro_picker(selected: u8) -> KeycodePicker {
         KeycodePicker {
@@ -872,7 +937,7 @@ impl Default for KeycodePicker {
             selected_tab: KeycodeTab::Basic,
             basic_layout: BasicPickerLayout::Qwerty,
             popup_view_mode: PickerViewMode::default(),
-            search_query: String::new(),
+            search: PickerSearch::default(),
             result: None,
             custom_keycodes: vec![],
             supports_rgb: true,
@@ -1145,7 +1210,7 @@ impl KeycodePicker {
         self.regular_key_pick = true;
         self.regular_key_pick_allow_mod_key = allow_mod_key;
         self.regular_mod_key_pick = None;
-        self.search_query.clear();
+        self.search.reset();
         self.vial_quantum_pending_mod = None;
         self.vial_quantum_pending_mt = None;
         self.vial_layer_pending = None;
@@ -1160,7 +1225,7 @@ impl KeycodePicker {
         self.regular_key_pick = false;
         self.regular_key_pick_allow_mod_key = false;
         self.regular_mod_key_pick = None;
-        self.search_query.clear();
+        self.search.reset();
         self.vial_quantum_pending_mod = None;
         self.vial_quantum_pending_mt = None;
         self.vial_layer_pending = None;
@@ -1436,12 +1501,11 @@ impl KeycodePicker {
         }
 
         if allow_escape_close && ctx.input(|i| i.key_pressed(Key::Escape)) {
-            if self.vial_quantum_pending_mod.is_some() || self.vial_quantum_pending_mt.is_some() {
-                self.vial_quantum_pending_mod = None;
-                self.vial_quantum_pending_mt = None;
-            } else {
-                self.open = false;
-            }
+            // Esc always closes the picker, even mid-search; a reopened
+            // picker starts with a cleared query anyway. Pending Mod+Key
+            // picks never reach here: show() routes them to the dedicated
+            // pending picker, which owns its own Esc handling.
+            self.open = false;
             return;
         }
 
@@ -1460,7 +1524,7 @@ impl KeycodePicker {
                         if self.vial_quantum_pending_mod.is_none()
                             && self.vial_quantum_pending_mt.is_none()
                         {
-                            if self.search_query.is_empty() || modifiers.any() {
+                            if self.search.query.is_empty() || modifiers.any() {
                                 if let Some(qmk) = egui_key_to_qmk(*key, *modifiers) {
                                     self.assign_keycode_value(qmk);
                                 }
@@ -1498,9 +1562,13 @@ impl KeycodePicker {
         .show(ctx, |ui| {
             apply_picker_button_visuals(ui);
             ui.vertical_centered(|ui| {
-                crate::ui_style::modal_intro(
-                    ui,
-                    tr_picker(self.language, "key_picker.press_key_or_pick"),
+                let search_width = 340.0_f32.min(ui.available_width() - 32.0);
+                ui.add_sized(
+                    Vec2::new(search_width, 26.0),
+                    egui::TextEdit::singleline(&mut self.search.query)
+                        .hint_text(tr_picker(self.language, "key_picker.search_hint"))
+                        .font(egui::FontId::proportional(12.5))
+                        .vertical_align(egui::Align::Center),
                 );
             });
             ui.add_space(4.0);
@@ -1537,6 +1605,7 @@ impl KeycodePicker {
                             }
                         }
                         self.selected_tab = *tab;
+                        self.search.reset();
                         self.vial_quantum_pending_mod = None;
                         self.vial_quantum_pending_mt = None;
                         self.vial_layer_pending = None;
@@ -1544,6 +1613,9 @@ impl KeycodePicker {
                 }
             });
             ui.add_space(crate::ui_style::modal_space_sm());
+
+            self.refresh_vial_search_results();
+            let searching = self.search.is_active();
 
             let content_height = key_picker_main_content_height(picker_size);
             ui.allocate_ui_with_layout(
@@ -1558,7 +1630,22 @@ impl KeycodePicker {
                             ui.scope(|ui| {
                                 apply_picker_button_visuals(ui);
 
-                                if self.selected_tab == KeycodeTab::Basic {
+                                if searching {
+                                    let centered_width = self.tab_content_width(ui);
+                                    let x_offset =
+                                        ((ui.available_width() - centered_width).max(0.0) * 0.5)
+                                            .floor();
+                                    ui.horizontal(|ui| {
+                                        if x_offset > 0.0 {
+                                            ui.add_space(x_offset);
+                                        }
+                                        ui.allocate_ui_with_layout(
+                                            Vec2::new(centered_width, 0.0),
+                                            egui::Layout::top_down(egui::Align::Min),
+                                            |ui| self.show_vial_search_results(ui),
+                                        );
+                                    });
+                                } else if self.selected_tab == KeycodeTab::Basic {
                                     ui.add_space(28.0);
                                     self.show_vial_tab_content(
                                         ui,

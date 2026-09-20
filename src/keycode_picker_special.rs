@@ -97,13 +97,11 @@ impl KeycodePicker {
         }
     }
 
-    pub(super) fn show_vial_special(
-        &mut self,
-        ui: &mut egui::Ui,
-        macro_data_state: DeferredPickerDataState,
-        tap_dance_data_state: DeferredPickerDataState,
-    ) {
-        let special_keys: Vec<(String, u16, String)> = vec![
+    // Curated Special-tab entries: visible caption, keycode, tooltip.
+    // The search index reuses these exact strings so everything the user
+    // sees on the Special tab is findable by the same words.
+    pub(super) fn vial_special_key_entries(&self) -> Vec<(String, u16, String)> {
+        vec![
             (
                 "✕
 None"
@@ -182,7 +180,16 @@ Repeat"
                 0x7C7A,
                 "Alt repeats the last pressed key".into(),
             ),
-        ];
+        ]
+    }
+
+    pub(super) fn show_vial_special(
+        &mut self,
+        ui: &mut egui::Ui,
+        macro_data_state: DeferredPickerDataState,
+        tap_dance_data_state: DeferredPickerDataState,
+    ) {
+        let special_keys = self.vial_special_key_entries();
 
         let special_title =
             crate::i18n::tr_catalog(self.language, "key_picker_text.special_qmk_keys");
