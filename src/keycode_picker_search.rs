@@ -15,6 +15,34 @@ pub(super) struct SearchEntry {
     pub(super) name: String,
     /// Localized description; shown as the tooltip and matched against.
     pub(super) tooltip: String,
+    /// Tab the entry belongs to; groups the results view.
+    pub(super) tab: KeycodeTab,
+    /// Localized section heading inside the tab ("" when the tab says enough).
+    pub(super) section: &'static str,
+}
+
+/// Section heading for a plain keycode, matching what its tab shows.
+fn keycode_section_label(
+    language: crate::i18n::Language,
+    kc: &crate::keycode::Keycode,
+) -> &'static str {
+    match kc.category {
+        crate::keycode::KeycodeCategory::Media => {
+            crate::i18n::tr_catalog(language, "key_picker_text.media_apps_system")
+        }
+        crate::keycode::KeycodeCategory::Mouse => {
+            crate::i18n::tr_catalog(language, "key_picker_text.mouse")
+        }
+        crate::keycode::KeycodeCategory::Numpad => {
+            crate::i18n::tr_catalog(language, "key_picker_text.numpad")
+        }
+        crate::keycode::KeycodeCategory::Function
+            if crate::keycode::is_extended_function_key(kc.value) =>
+        {
+            crate::i18n::tr_catalog(language, "key_picker_text.function_keys")
+        }
+        _ => "",
+    }
 }
 
 impl SearchEntry {
@@ -125,6 +153,8 @@ impl KeycodePicker {
                     self.language,
                     &self.picker_keycode_tooltip(kc.value, &custom_pairs),
                 ),
+                tab: KeycodeTab::preferred_for_vial_keycode(kc.value, false),
+                section: keycode_section_label(self.language, kc),
             });
         }
     }
@@ -140,6 +170,12 @@ impl KeycodePicker {
                 label: label.clone(),
                 name: name.clone(),
                 tooltip: crate::i18n::tr_text(self.language, title),
+                tab: if is_bluetooth_custom_keycode(name, label, title) {
+                    KeycodeTab::Bluetooth
+                } else {
+                    KeycodeTab::Custom
+                },
+                section: "",
             });
         }
     }
@@ -160,6 +196,8 @@ impl KeycodePicker {
                 label,
                 name: String::new(),
                 tooltip: crate::i18n::tr_text(self.language, &tip),
+                tab: KeycodeTab::Special,
+                section: crate::i18n::tr_catalog(self.language, "key_picker_text.special_qmk_keys"),
             });
         }
     }
@@ -187,6 +225,8 @@ impl KeycodePicker {
                     self.language,
                     &self.picker_keycode_tooltip(value, &custom_pairs),
                 ),
+                tab: KeycodeTab::Special,
+                section: caption,
             });
         }
     }
@@ -218,6 +258,8 @@ impl KeycodePicker {
                     self.language,
                     &self.picker_keycode_tooltip(value, &custom_pairs),
                 ),
+                tab: KeycodeTab::Special,
+                section: caption,
             });
         }
     }
@@ -242,6 +284,8 @@ impl KeycodePicker {
                 label,
                 name,
                 tooltip: crate::i18n::tr_text(self.language, &tooltip),
+                tab: KeycodeTab::UniversalSymbols,
+                section: "",
             });
         };
         for control in crate::universal_symbols::CONTROLS {
@@ -284,19 +328,54 @@ impl KeycodePicker {
         ui.add_space(4.0);
 
         let results = self.search.results().to_vec();
-        ui.horizontal_wrapped(|ui| {
-            for entry in results {
-                let resp = ui
-                    .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                Self::paint_compact_picker_label(ui, &resp, &entry.label);
-                if resp.clicked() {
-                    self.result = Some(entry.binding);
-                    self.open = false;
-                }
-                resp.on_hover_text(entry.tooltip);
+        let dark = ui.visuals().dark_mode;
+
+        // Group hits by (tab, section) in order of first appearance, so every
+        // result row says where the key normally lives.
+        let mut groups: Vec<((KeycodeTab, &'static str), Vec<SearchEntry>)> = Vec::new();
+        for entry in results {
+            let key = (entry.tab, entry.section);
+            match groups.iter_mut().find(|(group_key, _)| *group_key == key) {
+                Some((_, entries)) => entries.push(entry),
+                None => groups.push((key, vec![entry])),
             }
-        });
+        }
+
+        for ((tab, section), entries) in groups {
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 5.0;
+                ui.label(
+                    RichText::new(tab.glyph())
+                        .size(12.0)
+                        .color(picker_tab_tint(tab, dark)),
+                );
+                let mut heading = picker_tab_label(self.language, tab).to_string();
+                if !section.is_empty() {
+                    heading.push_str(" · ");
+                    heading.push_str(section);
+                }
+                ui.label(
+                    RichText::new(heading)
+                        .size(11.0)
+                        .color(Color32::from_gray(150)),
+                );
+            });
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                for entry in entries {
+                    let resp = ui
+                        .add_sized(Self::picker_key_size(ui.ctx()), egui::Button::new(""))
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    Self::paint_compact_picker_label(ui, &resp, &entry.label);
+                    if resp.clicked() {
+                        self.result = Some(entry.binding);
+                        self.open = false;
+                    }
+                    resp.on_hover_text(entry.tooltip);
+                }
+            });
+        }
     }
 }
 
@@ -345,6 +424,43 @@ mod tests {
         picker.search.query.clear();
         picker.refresh_vial_search_results();
         assert!(picker.search.results().is_empty());
+    }
+
+    #[test]
+    fn entries_carry_tab_and_section_for_grouping() {
+        let mut picker = KeycodePicker {
+            macro_count: 1,
+            macro_names: vec!["Email".into()],
+            ..Default::default()
+        };
+
+        let media = KEYCODES
+            .iter()
+            .find(|kc| matches!(kc.category, crate::keycode::KeycodeCategory::Media))
+            .expect("KEYCODES should contain a media key");
+        picker.search.query = media.name.to_string();
+        picker.refresh_vial_search_results();
+        let hit = picker
+            .search
+            .results()
+            .iter()
+            .find(|hit| hit.binding == KeyBinding::Vial(media.value))
+            .expect("media key should be found");
+        assert_eq!(hit.tab, KeycodeTab::Special);
+        assert_eq!(
+            hit.section,
+            crate::i18n::tr_catalog(picker.language, "key_picker_text.media_apps_system")
+        );
+
+        picker.search.query = "macro".into();
+        picker.refresh_vial_search_results();
+        let hit = picker
+            .search
+            .results()
+            .iter()
+            .find(|hit| hit.binding == KeyBinding::Vial(0x7700))
+            .expect("macro slot should be found");
+        assert_eq!(hit.tab, KeycodeTab::Special);
     }
 
     #[test]
