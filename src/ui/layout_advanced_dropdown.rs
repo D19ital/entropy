@@ -52,7 +52,14 @@ impl EntropyApp {
                 advanced_menu_labels.push(crate::i18n::tr(lang, TrKey::KeyOverridesTitle));
             }
             let advanced_dropdown_width =
-                adaptive_top_dropdown_width(ui, advanced_menu_labels, 152.0);
+                adaptive_top_icon_dropdown_width(ui, advanced_menu_labels, 152.0);
+            // Entropy tools work without a device. The rest is stored in firmware.
+            let dividers = top_menu_dividers([2, advanced_item_count - 2]);
+            let divider_height = if dividers[0] {
+                TOP_DROPDOWN_DIVIDER_HEIGHT + 3.0
+            } else {
+                0.0
+            };
             let dropdown_rect = egui::Rect::from_min_size(
                 egui::pos2(
                     advanced_rect.center().x - advanced_dropdown_width / 2.0,
@@ -60,7 +67,7 @@ impl EntropyApp {
                 ),
                 Vec2::new(
                     advanced_dropdown_width,
-                    (advanced_item_count.max(1) as f32) * 28.0 + 22.0,
+                    (advanced_item_count.max(1) as f32) * 28.0 + 22.0 + divider_height,
                 ),
             );
             let hover_bridge_rect = advanced_rect.union(dropdown_rect).expand(3.0);
@@ -93,26 +100,32 @@ impl EntropyApp {
                         top_dropdown_frame(dark)
                             .show(ui, |ui| {
                                 ui.set_min_width(item_width);
-                                let text_expander_resp = top_dropdown_item(
+                                let text_expander_resp = top_dropdown_icon_item(
                                     ui,
                                     item_width,
+                                    TopMenuIcon::TextExpander,
                                     crate::i18n::tr_catalog(lang, "text_expander.title"),
                                     true,
                                     self.main_menu_tab == MainMenuTab::Advanced
                                         && self.settings_tab == SettingsTab::TextExpander,
                                 );
-                                let typing_trainer_resp = top_dropdown_item(
+                                let typing_trainer_resp = top_dropdown_icon_item(
                                     ui,
                                     item_width,
+                                    TopMenuIcon::TypingTrainer,
                                     crate::i18n::tr_catalog(lang, "typing_trainer.title"),
                                     true,
                                     self.main_menu_tab == MainMenuTab::Advanced
                                         && self.settings_tab == SettingsTab::TypingTrainer,
                                 );
+                                if dividers[0] {
+                                    top_dropdown_divider(ui, item_width);
+                                }
                                 let macro_resp = macro_supported.then(|| {
-                                    top_dropdown_item(
+                                    top_dropdown_icon_item(
                                         ui,
                                         item_width,
+                                        TopMenuIcon::Macros,
                                         crate::i18n::tr_catalog(lang, "macro_editor.title"),
                                         true,
                                         self.main_menu_tab == MainMenuTab::Advanced
@@ -120,9 +133,10 @@ impl EntropyApp {
                                     )
                                 });
                                 let tap_dance_resp = tap_dance_supported.then(|| {
-                                    top_dropdown_item(
+                                    top_dropdown_icon_item(
                                         ui,
                                         item_width,
+                                        TopMenuIcon::TapDance,
                                         crate::i18n::tr_catalog(lang, "tap_dance_editor.title"),
                                         true,
                                         self.main_menu_tab == MainMenuTab::Advanced
@@ -130,9 +144,10 @@ impl EntropyApp {
                                     )
                                 });
                                 let combo_resp = combo_supported.then(|| {
-                                    top_dropdown_item(
+                                    top_dropdown_icon_item(
                                         ui,
                                         item_width,
+                                        TopMenuIcon::Combo,
                                         crate::i18n::tr(lang, TrKey::ComboTitle),
                                         true,
                                         self.main_menu_tab == MainMenuTab::Advanced
@@ -140,9 +155,10 @@ impl EntropyApp {
                                     )
                                 });
                                 let auto_shift_resp = auto_shift_supported.then(|| {
-                                    top_dropdown_item(
+                                    top_dropdown_icon_item(
                                         ui,
                                         item_width,
+                                        TopMenuIcon::AutoShift,
                                         crate::i18n::tr(lang, TrKey::AutoShiftTitle),
                                         true,
                                         self.main_menu_tab == MainMenuTab::Advanced
@@ -150,9 +166,10 @@ impl EntropyApp {
                                     )
                                 });
                                 let key_override_resp = key_override_supported.then(|| {
-                                    top_dropdown_item(
+                                    top_dropdown_icon_item(
                                         ui,
                                         item_width,
+                                        TopMenuIcon::KeyOverrides,
                                         crate::i18n::tr(lang, TrKey::KeyOverridesTitle),
                                         true,
                                         self.main_menu_tab == MainMenuTab::Advanced

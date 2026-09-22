@@ -97,15 +97,18 @@ impl EntropyApp {
             let device_count = self.device_manager.devices().len();
             let device_rows = device_count.max(1) as f32;
             let devices_h = 12.0 + device_rows * 30.0;
-            let sticky_layout_h = 36.0;
-            let layer_operations_h = 36.0;
+            // Row heights include the 3px item spacing. Each group after the
+            // device list starts with a divider.
+            let divider_h = TOP_DROPDOWN_DIVIDER_HEIGHT + 3.0;
+            let sticky_layout_h = divider_h + 33.0;
+            let layer_operations_h = divider_h + 33.0;
             #[cfg(not(target_arch = "wasm32"))]
-            let import_export_h = 102.0;
+            let import_export_h = divider_h + 99.0;
             #[cfg(target_arch = "wasm32")]
             let import_export_h = 0.0;
             let about_device_h = 36.0;
             let show_key_legend_switcher = self.app_settings.key_legend_layout.is_multilingual();
-            let key_legend_switcher_h = if show_key_legend_switcher { 36.0 } else { 0.0 };
+            let key_legend_switcher_h = if show_key_legend_switcher { 33.0 } else { 0.0 };
             let mut device_menu_labels: Vec<String> = if self.device_manager.devices().is_empty() {
                 vec![crate::i18n::tr(lang, TrKey::NoDevicesFound).to_owned()]
             } else {
@@ -138,7 +141,7 @@ impl EntropyApp {
                 .push(crate::i18n::tr_catalog(lang, "ui.sticky_layout_window_label").to_owned());
             device_menu_labels.push(about_device_label(lang).to_owned());
             let dropdown_size = Vec2::new(
-                adaptive_top_dropdown_width(
+                adaptive_top_icon_dropdown_width(
                     ui,
                     device_menu_labels.iter().map(String::as_str),
                     152.0,
@@ -221,7 +224,7 @@ impl EntropyApp {
                                         egui::vec2(dropdown_size.x - 16.0, 30.0),
                                         egui::Layout::left_to_right(egui::Align::Center),
                                         |ui| {
-                                            ui.add_space(10.0);
+                                            ui.add_space(TOP_DROPDOWN_ICON_TEXT_LEFT);
                                             ui.label(
                                                 RichText::new(crate::i18n::tr(
                                                     lang,
@@ -247,9 +250,10 @@ impl EntropyApp {
                                         let display_name = dev.display_name_with_transport(
                                             cached_display_name.unwrap_or(dev.name.as_str()),
                                         );
-                                        let resp = top_dropdown_item(
+                                        let resp = top_dropdown_icon_item(
                                             ui,
                                             dropdown_size.x - 16.0,
+                                            TopMenuIcon::Device,
                                             &display_name,
                                             switch_enabled,
                                             is_selected,
@@ -271,15 +275,16 @@ impl EntropyApp {
                                     { self.selected_device = Some(idx); }
                                 }
 
+                                top_dropdown_divider(ui, dropdown_size.x - 16.0);
                                 if show_key_legend_switcher {
                                     if let Some(order_key) =
                                         self.app_settings.key_legend_layout.order_i18n_key()
                                     {
-                                        ui.add_space(6.0);
                                         let order_label = crate::i18n::tr_catalog(lang, order_key);
-                                        if top_dropdown_item(
+                                        if top_dropdown_icon_item(
                                             ui,
                                             dropdown_size.x - 16.0,
+                                            TopMenuIcon::KeyLegendOrder,
                                             order_label,
                                             true,
                                             false,
@@ -294,10 +299,10 @@ impl EntropyApp {
                                     }
                                 }
 
-                                ui.add_space(6.0);
-                                let layer_operations_response = top_dropdown_submenu_item(
+                                let layer_operations_response = top_dropdown_icon_submenu_item(
                                     ui,
                                     dropdown_size.x - 16.0,
+                                    TopMenuIcon::LayerOperations,
                                     crate::i18n::tr_catalog(lang, "layer_actions.menu"),
                                     layer_operations_available,
                                     submenu_was_open
@@ -311,10 +316,11 @@ impl EntropyApp {
 
                                 #[cfg(not(target_arch = "wasm32"))]
                                 {
-                                    ui.add_space(6.0);
-                                    if top_dropdown_item(
+                                    top_dropdown_divider(ui, dropdown_size.x - 16.0);
+                                    if top_dropdown_icon_item(
                                         ui,
                                         dropdown_size.x - 16.0,
+                                        TopMenuIcon::ImportLayout,
                                         entlayout_import_label(lang),
                                         self.layout.is_some(),
                                         false,
@@ -325,9 +331,10 @@ impl EntropyApp {
                                         self.request_entlayout_import_after_full_load();
                                         ctx.request_repaint();
                                     }
-                                    if top_dropdown_item(
+                                    if top_dropdown_icon_item(
                                         ui,
                                         dropdown_size.x - 16.0,
+                                        TopMenuIcon::ExportLayout,
                                         entlayout_export_label(lang),
                                         self.layout.is_some(),
                                         false,
@@ -338,9 +345,10 @@ impl EntropyApp {
                                         self.request_entlayout_export_after_full_load();
                                         ctx.request_repaint();
                                     }
-                                    if top_dropdown_item(
+                                    if top_dropdown_icon_item(
                                         ui,
                                         dropdown_size.x - 16.0,
+                                        TopMenuIcon::ExportImage,
                                         layout_image_export_label(lang),
                                         self.layout.is_some(),
                                         false,
@@ -353,10 +361,11 @@ impl EntropyApp {
                                     }
                                 }
 
-                                ui.add_space(6.0);
-                                if top_dropdown_item(
+                                top_dropdown_divider(ui, dropdown_size.x - 16.0);
+                                if top_dropdown_icon_item(
                                     ui,
                                     dropdown_size.x - 16.0,
+                                    TopMenuIcon::LayoutIndicator,
                                     crate::i18n::tr_catalog(lang, "ui.sticky_layout_window_label"),
                                     true,
                                     self.app_settings.sticky_layout_window,
@@ -385,9 +394,10 @@ impl EntropyApp {
                                     device_clicked = true;
                                 }
 
-                                if top_dropdown_item_with_indicator(
+                                if top_dropdown_icon_item_with_indicator(
                                     ui,
                                     dropdown_size.x - 16.0,
+                                    TopMenuIcon::AboutDevice,
                                     about_device_label(lang),
                                     self.layout.is_some(),
                                     self.main_menu_tab == MainMenuTab::Settings
