@@ -1563,15 +1563,49 @@ impl KeycodePicker {
             apply_picker_button_visuals(ui);
             ui.vertical_centered(|ui| {
                 let search_width = 340.0_f32.min(ui.available_width() - 32.0);
-                ui.add_sized(
+                let search_resp = ui.add_sized(
                     Vec2::new(search_width, 26.0),
                     egui::TextEdit::singleline(&mut self.search.query)
                         .hint_text(tr_picker(self.language, "key_picker.search_hint"))
                         .font(egui::FontId::proportional(12.5))
-                        .vertical_align(egui::Align::Center),
+                        .vertical_align(egui::Align::Center)
+                        .margin(egui::Margin {
+                            left: 8,
+                            right: 26,
+                            top: 2,
+                            bottom: 2,
+                        }),
                 );
+                // Inline clear control, shown only while a query is present.
+                if !self.search.query.is_empty() {
+                    let clear_rect = egui::Rect::from_center_size(
+                        egui::pos2(
+                            search_resp.rect.right() - 14.0,
+                            search_resp.rect.center().y,
+                        ),
+                        Vec2::splat(18.0),
+                    );
+                    let clear_resp = ui
+                        .allocate_rect(clear_rect, egui::Sense::click())
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    let color = if clear_resp.hovered() {
+                        ui.visuals().text_color()
+                    } else {
+                        crate::ui_style::muted_text(ui.visuals().dark_mode)
+                    };
+                    ui.painter().text(
+                        clear_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "✕",
+                        egui::FontId::proportional(12.0),
+                        color,
+                    );
+                    if clear_resp.clicked() {
+                        self.search.reset();
+                    }
+                }
             });
-            ui.add_space(4.0);
+            ui.add_space(12.0);
 
             if !self.vial_tab_supported(self.selected_tab) {
                 self.selected_tab = KeycodeTab::Basic;
