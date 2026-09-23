@@ -225,6 +225,7 @@ impl EntropyApp {
             },
         );
         let mut changed = false;
+        let mut deleted_layout = false;
         if let Some(settings) = self.app_settings.application_layouts.get_mut(&device_key) {
             if settings.automatically_return_to_default != automatically_return_to_default {
                 settings.automatically_return_to_default = automatically_return_to_default;
@@ -293,7 +294,6 @@ impl EntropyApp {
             let is_default =
                 selected.id == crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID;
             let executable = selected.executable.clone();
-            let mut title_contains = selected.title_contains.clone();
             let mut automatic = selected.automatic_switching;
 
             crate::ui_style::settings_list_row(
@@ -328,7 +328,8 @@ impl EntropyApp {
                         if let Some(settings) =
                             self.app_settings.application_layouts.get_mut(&device_key)
                         {
-                            changed |= settings.remove(&selected.id);
+                            deleted_layout = settings.remove(&selected.id);
+                            changed |= deleted_layout;
                         }
                     }
                 },
@@ -414,36 +415,6 @@ impl EntropyApp {
                 },
             );
 
-            crate::ui_style::settings_list_row_with_tooltip(
-                ui,
-                row_width,
-                row_height,
-                app_layout_text(
-                    language,
-                    "Фрагмент заголовка окна",
-                    "Window title fragment",
-                ),
-                !is_default,
-                Some(app_layout_text(
-                    language,
-                    "Необязательно. Используйте, только если одному приложению нужны разные раскладки — например, для разных проектов VS Code",
-                    "Optional. Use only when one application needs separate layouts, for example for different VS Code projects",
-                )),
-                control_width,
-                |ui| {
-                    crate::ui_style::modern_text_field_interactive(
-                        ui,
-                        ui.make_persistent_id("application_layout_window_title"),
-                        &mut title_contains,
-                        control_width,
-                        app_layout_text(language, "Необязательно", "Optional"),
-                        120,
-                        egui::Align::Min,
-                        false,
-                    );
-                },
-            );
-
             if let Some(settings) = self.app_settings.application_layouts.get_mut(&device_key) {
                 if let Some(layout) = settings.layouts.get_mut(&selected.id) {
                     if !is_default && layout.automatic_switching != automatic {
@@ -453,6 +424,20 @@ impl EntropyApp {
                     }
                 }
             }
+        }
+
+        if deleted_layout {
+            // Deletion can change both the active and editor profiles without a
+            // foreground-window event. Invalidate the cached source so the next
+            // runtime tick resolves the currently focused app from stable IDs.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.application_layout_foreground = None;
+            }
+            self.selected_layer = 0;
+            self.selected_key = None;
+            self.selected_encoder = None;
+            self.reset_matrix_tester_state();
         }
 
         let detector = self.application_discovery.foreground_status.clone();
@@ -751,6 +736,7 @@ impl EntropyApp {
 
     fn open_application_picker(&mut self, assign_existing: bool) {
         self.application_picker_assign_existing = assign_existing;
+        self.application_picker_target_layout_id = None;
         self.application_picker_open = true;
         self.application_picker_search.clear();
         self.application_manual_executable.clear();
@@ -768,6 +754,7 @@ impl EntropyApp {
                 })
                 .cloned();
             if let Some(layout) = selected {
+                self.application_picker_target_layout_id = Some(layout.id.clone());
                 self.application_picker_layout_name = layout.name.clone();
                 self.application_picker_title_contains = layout.title_contains.clone();
                 self.application_picker_selected =
@@ -789,9 +776,7 @@ impl EntropyApp {
         let Some(settings) = self.app_settings.application_layouts.get(&device_key) else {
             return (false, false);
         };
-        let excluding_id = self
-            .application_picker_assign_existing
-            .then_some(settings.editor_layout_id.as_str());
+        let excluding_id = self.application_picker_target_layout_id.as_deref();
         let duplicate_name =
             settings.layout_name_exists(&self.application_picker_layout_name, excluding_id);
         let duplicate_rule = self
@@ -887,6 +872,19 @@ impl EntropyApp {
                         );
                     }
 
+                    if duplicate_rule {
+                        ui.add_space(metrics.value(8.0));
+                        ui.label(
+                            RichText::new(app_layout_text(
+                                language,
+                                "Для выбранного приложения уже существует такое правило. Пустой фрагмент заголовка допустим",
+                                "The selected application already has this rule. An empty title fragment is valid",
+                            ))
+                            .size(metrics.value(11.0))
+                            .color(egui::Color32::from_rgb(220, 92, 76)),
+                        );
+                    }
+
                     ui.add_space(metrics.value(10.0));
                     ui.label(
                         RichText::new(app_layout_text(
@@ -908,18 +906,6 @@ impl EntropyApp {
                         120,
                         egui::Align::Min,
                     );
-                    if duplicate_rule {
-                        ui.label(
-                            RichText::new(app_layout_text(
-                                language,
-                                "Для этого приложения уже есть раскладка с таким фильтром",
-                                "A layout for this application and title filter already exists",
-                            ))
-                            .size(metrics.value(11.0))
-                            .color(egui::Color32::from_rgb(220, 92, 76)),
-                        );
-                    }
-
                     ui.add_space(metrics.value(12.0));
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
@@ -1136,6 +1122,7 @@ impl EntropyApp {
         }
         if !open {
             self.application_picker_selected = None;
+            self.application_picker_target_layout_id = None;
             self.application_picker_layout_name.clear();
             self.application_picker_title_contains.clear();
             self.application_manual_executable.clear();
@@ -1157,21 +1144,8 @@ impl EntropyApp {
             .application_layouts
             .entry(device_key)
             .or_default();
-        if self.application_picker_assign_existing
-            && settings.editor_layout_id
-                != crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID
-        {
-            if let Some(layout) = settings.editor_layout_mut() {
-                layout.name = name.trim().to_owned();
-                layout.executable = application.executable.clone();
-                layout.application_identities =
-                    crate::application_layouts::normalized_identity_values(
-                        std::iter::once(application.executable.as_str())
-                            .chain(application.identities.iter().map(String::as_str)),
-                    );
-                layout.title_contains = title_contains.trim().to_owned();
-                layout.bump_revision();
-            }
+        if let Some(target_id) = self.application_picker_target_layout_id.as_deref() {
+            settings.update_application_rule(target_id, &application, &name, &title_contains);
         } else {
             settings.create_for_application_named(&application, Some(&name), &title_contains);
         }
@@ -1410,22 +1384,13 @@ impl EntropyApp {
             .application_layouts
             .entry(device_key)
             .or_default();
-        if self.application_picker_assign_existing
-            && settings.editor_layout_id
-                != crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID
-        {
-            if let Some(layout) = settings.editor_layout_mut() {
-                layout.executable = application.executable.clone();
-                layout.application_identities =
-                    crate::application_layouts::normalized_identity_values(
-                        std::iter::once(application.executable.as_str())
-                            .chain(application.identities.iter().map(String::as_str)),
-                    );
-                if layout.name.trim().is_empty() {
-                    layout.name = application.display_name;
-                }
-                layout.bump_revision();
-            }
+        if let Some(target_id) = self.application_picker_target_layout_id.as_deref() {
+            let existing_name = settings
+                .layouts
+                .get(target_id)
+                .map(|layout| layout.name.clone())
+                .unwrap_or_default();
+            settings.update_application_rule(target_id, &application, &existing_name, "");
         } else {
             settings.create_for_application(&application);
         }

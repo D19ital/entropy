@@ -111,6 +111,7 @@ impl EntropyApp {
             application_layout_foreground: None,
             application_picker_open: false,
             application_picker_assign_existing: false,
+            application_picker_target_layout_id: None,
             application_picker_search: String::new(),
             application_manual_executable: String::new(),
             application_picker_selected: None,

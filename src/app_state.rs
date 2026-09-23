@@ -5203,6 +5203,9 @@ pub struct EntropyApp {
         Option<crate::application_layouts::DetectedApplication>,
     pub(crate) application_picker_open: bool,
     pub(crate) application_picker_assign_existing: bool,
+    /// Stable profile selected when the edit dialog opens. Foreground changes
+    /// must not redirect the dialog to another profile before Save is clicked.
+    pub(crate) application_picker_target_layout_id: Option<String>,
     pub(crate) application_picker_search: String,
     pub(crate) application_manual_executable: String,
     pub(crate) application_picker_selected: Option<crate::application_layouts::DetectedApplication>,

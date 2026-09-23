@@ -288,8 +288,27 @@ impl DeviceApplicationLayouts {
                 changed = true;
             }
         }
-        for layout in self.layouts.values_mut() {
+        // The map key is the stable profile identity. Older or partially
+        // written settings could contain a stale `layout.id`; UI actions used
+        // that inner value and could therefore edit/delete a neighbouring
+        // profile. Repair the invariant before any profile is exposed.
+        for (stable_id, layout) in &mut self.layouts {
+            if layout.id != *stable_id {
+                layout.id = stable_id.clone();
+                changed = true;
+            }
             changed |= layout.normalize();
+        }
+        let next_unused_id = self
+            .layouts
+            .keys()
+            .filter_map(|id| id.rsplit_once('_')?.1.parse::<u32>().ok())
+            .max()
+            .map(|value| value.saturating_add(1))
+            .unwrap_or(1);
+        if self.next_id < next_unused_id {
+            self.next_id = next_unused_id;
+            changed = true;
         }
         if !self.layouts.contains_key(&self.editor_layout_id) {
             self.editor_layout_id = default_layout_id();
@@ -402,6 +421,47 @@ impl DeviceApplicationLayouts {
                         .chain(application.identities.iter().map(String::as_str)),
                 )
         })
+    }
+
+    pub(crate) fn update_application_rule(
+        &mut self,
+        id: &str,
+        application: &DetectedApplication,
+        name: &str,
+        title_contains: &str,
+    ) -> bool {
+        if id == DEFAULT_APPLICATION_LAYOUT_ID {
+            return false;
+        }
+        let Some(layout) = self.layouts.get_mut(id) else {
+            return false;
+        };
+        let identities = normalized_identity_values(
+            std::iter::once(application.executable.as_str())
+                .chain(application.identities.iter().map(String::as_str)),
+        );
+        let name = name.trim();
+        let name = if name.is_empty() {
+            application.display_name.trim()
+        } else {
+            name
+        };
+        let name = if name.is_empty() { "Application" } else { name };
+        let executable = application.executable.trim();
+        let title_contains = title_contains.trim();
+        if layout.name == name
+            && layout.executable == executable
+            && layout.application_identities == identities
+            && layout.title_contains == title_contains
+        {
+            return false;
+        }
+        layout.name = name.to_owned();
+        layout.executable = executable.to_owned();
+        layout.application_identities = identities;
+        layout.title_contains = title_contains.to_owned();
+        layout.bump_revision();
+        true
     }
 
     pub(crate) fn remove(&mut self, id: &str) -> bool {
@@ -659,24 +719,39 @@ pub(crate) fn normalize_executable(value: &str) -> String {
 }
 
 pub(crate) fn executables_match(left: &str, right: &str) -> bool {
-    application_identity_aliases(left)
-        .iter()
-        .any(|left| application_identity_aliases(right).contains(left))
+    application_identities_match([left], [right])
 }
 
 pub(crate) fn application_identities_match<'a>(
     left: impl IntoIterator<Item = &'a str>,
     right: impl IntoIterator<Item = &'a str>,
 ) -> bool {
-    let left = normalized_identity_values(left);
-    let right = normalized_identity_values(right);
-    left.iter().any(|identity| right.contains(identity))
+    application_identity_match_score(left, right) > 0
 }
 
 pub(crate) fn application_identity_match_score<'a>(
     left: impl IntoIterator<Item = &'a str>,
     right: impl IntoIterator<Item = &'a str>,
 ) -> usize {
+    let left = left.into_iter().collect::<Vec<_>>();
+    let right = right.into_iter().collect::<Vec<_>>();
+    let left_bundle_ids = authoritative_bundle_ids(left.iter().copied());
+    let right_bundle_ids = authoritative_bundle_ids(right.iter().copied());
+
+    // NSWorkspace gives us a stable bundle identifier. When both records have
+    // one, paths, localized names and helper-process aliases must never make
+    // two different applications equal (for example Finder and another
+    // process containing the word `finder`). Fall back to aliases only when a
+    // stable identifier is absent on at least one side.
+    if !left_bundle_ids.is_empty() && !right_bundle_ids.is_empty() {
+        return left_bundle_ids
+            .iter()
+            .filter(|bundle_id| right_bundle_ids.contains(bundle_id))
+            .map(String::len)
+            .max()
+            .unwrap_or(0);
+    }
+
     let left = normalized_identity_values(left);
     let right = normalized_identity_values(right);
     left.iter()
@@ -684,6 +759,42 @@ pub(crate) fn application_identity_match_score<'a>(
         .map(String::len)
         .max()
         .unwrap_or(0)
+}
+
+fn authoritative_bundle_ids<'a>(values: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut bundle_ids = values
+        .into_iter()
+        .filter_map(|value| {
+            let value = value.trim();
+            if value.is_empty()
+                || value
+                    .chars()
+                    .any(|character| matches!(character, '/' | '\\' | ' '))
+                || value.ends_with(".exe")
+            {
+                return None;
+            }
+            let parts = value.split('.').collect::<Vec<_>>();
+            if parts.len() < 3
+                || !matches!(
+                    parts[0].to_ascii_lowercase().as_str(),
+                    "com" | "org" | "net" | "io" | "app" | "ru"
+                )
+                || parts.iter().any(|part| {
+                    part.is_empty()
+                        || !part
+                            .chars()
+                            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+                })
+            {
+                return None;
+            }
+            Some(value.to_ascii_lowercase())
+        })
+        .collect::<Vec<_>>();
+    bundle_ids.sort();
+    bundle_ids.dedup();
+    bundle_ids
 }
 
 pub(crate) fn normalized_identity_values<'a>(
@@ -1095,6 +1206,46 @@ mod tests {
     }
 
     #[test]
+    fn distinct_macos_bundle_ids_do_not_conflict_through_shared_aliases() {
+        let mut settings = DeviceApplicationLayouts::default();
+        settings.create_for_application(&DetectedApplication {
+            executable: "com.example.FirstApp".to_owned(),
+            identities: vec!["Shared Helper".to_owned(), "finder".to_owned()],
+            display_name: "First".to_owned(),
+            window_title: String::new(),
+        });
+        let second = DetectedApplication {
+            executable: "com.example.SecondApp".to_owned(),
+            identities: vec!["Shared Helper".to_owned(), "finder".to_owned()],
+            display_name: "Second".to_owned(),
+            window_title: String::new(),
+        };
+
+        assert!(!settings.application_rule_exists(&second, "", None));
+        assert_eq!(
+            settings.resolve(Some(&second)),
+            DEFAULT_APPLICATION_LAYOUT_ID
+        );
+    }
+
+    #[test]
+    fn exact_macos_bundle_id_is_a_duplicate_with_an_empty_optional_filter() {
+        let mut settings = DeviceApplicationLayouts::default();
+        let finder = DetectedApplication {
+            executable: "com.apple.finder".to_owned(),
+            identities: vec![
+                "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder".to_owned(),
+                "Finder".to_owned(),
+            ],
+            display_name: "Finder".to_owned(),
+            window_title: String::new(),
+        };
+        settings.create_for_application(&finder);
+
+        assert!(settings.application_rule_exists(&finder, "", None));
+    }
+
+    #[test]
     fn poisoned_macos_telegram_rule_does_not_capture_ticktick() {
         let mut settings = DeviceApplicationLayouts::default();
         let telegram = settings.create_for_application(&DetectedApplication {
@@ -1289,6 +1440,64 @@ mod tests {
         assert!(first < second);
 
         assert_eq!(settings.resolve(Some(&app("Telegram", "Telegram"))), first);
+    }
+
+    #[test]
+    fn normalization_repairs_stale_inner_ids_before_deletion() {
+        let mut settings = DeviceApplicationLayouts::default();
+        let finder = settings.create_for_application(&app("com.apple.finder", "Finder"));
+        let telegram = settings.create_for_application(&app("ru.keepcoder.Telegram", "Telegram"));
+        settings.layouts.get_mut(&finder).unwrap().layers[0][0] = 0x1111;
+        settings.layouts.get_mut(&telegram).unwrap().layers[0][0] = 0x2222;
+
+        settings.layouts.get_mut(&finder).unwrap().id = telegram.clone();
+        settings.layouts.get_mut(&telegram).unwrap().id = finder.clone();
+        settings.active_layout_id = finder.clone();
+        settings.editor_layout_id = telegram.clone();
+        assert!(settings.normalize());
+        assert_eq!(settings.layouts[&finder].id, finder);
+        assert_eq!(settings.layouts[&telegram].id, telegram);
+
+        assert!(settings.remove(&telegram));
+        assert_eq!(settings.active_layout_id, finder);
+        assert_eq!(settings.editor_layout_id, DEFAULT_APPLICATION_LAYOUT_ID);
+        assert_eq!(settings.layouts[&finder].layers[0][0], 0x1111);
+        assert_eq!(
+            settings.resolve(Some(&app("com.apple.finder", "Finder"))),
+            finder
+        );
+    }
+
+    #[test]
+    fn edit_targets_stable_id_even_when_editor_selection_changes() {
+        let mut settings = DeviceApplicationLayouts::default();
+        let finder = settings.create_for_application(&app("com.apple.finder", "Finder"));
+        let telegram = settings.create_for_application(&app("ru.keepcoder.Telegram", "Telegram"));
+        let telegram_before = settings.layouts[&telegram].clone();
+        settings.editor_layout_id = telegram.clone();
+
+        assert!(settings.update_application_rule(
+            &finder,
+            &app("com.apple.Safari", "Safari"),
+            "Browser",
+            "Private"
+        ));
+        assert_eq!(settings.layouts[&finder].executable, "com.apple.Safari");
+        assert_eq!(settings.layouts[&finder].name, "Browser");
+        assert_eq!(settings.layouts[&finder].title_contains, "Private");
+        assert_eq!(settings.layouts[&telegram], telegram_before);
+    }
+
+    #[test]
+    fn deleted_profile_id_is_not_reused_after_legacy_settings_normalize() {
+        let mut settings = DeviceApplicationLayouts::default();
+        let finder = settings.create_for_application(&app("com.apple.finder", "Finder"));
+        settings.next_id = 1;
+        assert!(settings.normalize());
+        assert!(settings.remove(&finder));
+
+        let replacement = settings.create_for_application(&app("com.apple.finder", "Finder"));
+        assert_ne!(replacement, finder);
     }
 
     #[test]
