@@ -1,0 +1,689 @@
+use super::*;
+
+fn device_supports_application_layouts(device: &crate::device::Device) -> bool {
+    device.firmware == FirmwareProtocol::Vial && device.is_m4cr0pad_v3()
+}
+
+impl EntropyApp {
+    pub(super) fn application_layouts_supported(&self) -> bool {
+        self.selected_device
+            .and_then(|index| self.device_manager.devices().get(index))
+            .is_some_and(device_supports_application_layouts)
+    }
+
+    pub(super) fn application_layout_device_key(&self) -> Option<String> {
+        if !self.application_layouts_supported() {
+            return None;
+        }
+        Some(match self.current_keyboard_id {
+            Some(id) => format!("vial-{id:016x}"),
+            None => device_id_slug(&self.current_device_name),
+        })
+    }
+
+    pub(super) fn application_layout_settings(
+        &self,
+    ) -> Option<&crate::application_layouts::DeviceApplicationLayouts> {
+        let key = self.application_layout_device_key()?;
+        self.app_settings.application_layouts.get(&key)
+    }
+
+    fn application_layout_settings_mut(
+        &mut self,
+    ) -> Option<&mut crate::application_layouts::DeviceApplicationLayouts> {
+        let key = self.application_layout_device_key()?;
+        Some(
+            self.app_settings
+                .application_layouts
+                .entry(key)
+                .or_default(),
+        )
+    }
+
+    pub(super) fn application_layout_editor_options(&self) -> Vec<(String, String)> {
+        let mut layouts = self
+            .application_layout_settings()
+            .map(|settings| {
+                settings
+                    .layouts
+                    .values()
+                    .map(|layout| (layout.id.clone(), layout.name.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        layouts.sort_by(|left, right| {
+            let left_default = left.0 == crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID;
+            let right_default =
+                right.0 == crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID;
+            right_default
+                .cmp(&left_default)
+                .then_with(|| left.1.to_lowercase().cmp(&right.1.to_lowercase()))
+        });
+        layouts
+    }
+
+    pub(super) fn select_application_layout_for_editing(&mut self, id: &str) -> bool {
+        let changed = self
+            .application_layout_settings_mut()
+            .is_some_and(|settings| {
+                if !settings.layouts.contains_key(id) || settings.editor_layout_id == id {
+                    return false;
+                }
+                settings.editor_layout_id = id.to_owned();
+                true
+            });
+        if changed {
+            self.selected_layer = 0;
+            self.selected_key = None;
+            self.selected_encoder = None;
+            save_app_settings(&self.app_settings);
+        }
+        changed
+    }
+
+    pub(super) fn application_layout_editor_layer_names(&self) -> Vec<String> {
+        self.application_layout_settings()
+            .and_then(|settings| settings.editor_layout())
+            .map(|layout| layout.layer_names.clone())
+            .unwrap_or_else(crate::application_layouts::default_layer_names)
+    }
+
+    pub(super) fn rename_application_layout_layer(&mut self, layer: usize, name: String) -> bool {
+        let changed = self
+            .application_layout_settings_mut()
+            .and_then(|settings| settings.editor_layout_mut())
+            .is_some_and(|layout| layout.set_layer_name(layer, name));
+        if changed {
+            save_app_settings(&self.app_settings);
+        }
+        changed
+    }
+
+    fn application_control_for_key(layout: &KeyboardLayout, key_index: usize) -> Option<usize> {
+        let key = layout.keys.get(key_index)?;
+        match (key.row, key.col) {
+            (0, 2) => Some(12),
+            (1..=4, 0..=2) => Some((usize::from(key.row) - 1) * 3 + usize::from(key.col)),
+            _ => None,
+        }
+    }
+
+    fn application_control_for_encoder(
+        layout: &KeyboardLayout,
+        visual_index: usize,
+    ) -> Option<usize> {
+        let encoder = layout.encoders.get(visual_index)?;
+        if encoder.encoder_idx != 0 || encoder.direction > 1 {
+            return None;
+        }
+        Some(13 + usize::from(encoder.direction))
+    }
+
+    fn base_application_layers(
+        layout: &KeyboardLayout,
+    ) -> [[u16; crate::application_layouts::APPLICATION_LAYOUT_CONTROL_COUNT];
+           crate::application_layouts::APPLICATION_LAYOUT_LAYER_COUNT] {
+        let mut layers = [[0u16; crate::application_layouts::APPLICATION_LAYOUT_CONTROL_COUNT];
+            crate::application_layouts::APPLICATION_LAYOUT_LAYER_COUNT];
+        for layer in 0..crate::application_layouts::APPLICATION_LAYOUT_LAYER_COUNT {
+            for (key_index, _) in layout.keys.iter().enumerate() {
+                if let Some(control) = Self::application_control_for_key(layout, key_index) {
+                    layers[layer][control] =
+                        layout.get_key_binding(layer, key_index).vial_keycode();
+                }
+            }
+            for (visual_index, _) in layout.encoders.iter().enumerate() {
+                if let Some(control) = Self::application_control_for_encoder(layout, visual_index) {
+                    layers[layer][control] = layout.get_encoder_keycode(layer, visual_index);
+                }
+            }
+        }
+        layers
+    }
+
+    fn application_layout_rendered_copy_for_profile(
+        layout: &KeyboardLayout,
+        profile: Option<&crate::application_layouts::ApplicationLayout>,
+    ) -> KeyboardLayout {
+        let mut rendered = layout.clone();
+        let Some(profile) = profile else {
+            return rendered;
+        };
+        for layer in 0..crate::application_layouts::APPLICATION_LAYOUT_LAYER_COUNT {
+            let Some(keycodes) = profile.layers.get(layer) else {
+                continue;
+            };
+            for key_index in 0..rendered.keys.len() {
+                if let Some(control) = Self::application_control_for_key(&rendered, key_index) {
+                    rendered.set_key_binding(
+                        layer,
+                        key_index,
+                        crate::keyboard::KeyBinding::Vial(keycodes[control]),
+                    );
+                }
+            }
+            for visual_index in 0..rendered.encoders.len() {
+                if let Some(control) =
+                    Self::application_control_for_encoder(&rendered, visual_index)
+                {
+                    rendered.set_encoder_keycode(layer, visual_index, keycodes[control]);
+                }
+            }
+        }
+        rendered
+    }
+
+    pub(super) fn application_layout_rendered_copy(
+        &self,
+        layout: &KeyboardLayout,
+    ) -> KeyboardLayout {
+        Self::application_layout_rendered_copy_for_profile(
+            layout,
+            self.application_layout_settings()
+                .and_then(|settings| settings.editor_layout()),
+        )
+    }
+
+    pub(super) fn application_layout_active_rendered_copy(
+        &self,
+        layout: &KeyboardLayout,
+    ) -> KeyboardLayout {
+        Self::application_layout_rendered_copy_for_profile(
+            layout,
+            self.application_layout_settings()
+                .and_then(|settings| settings.active_layout()),
+        )
+    }
+
+    pub(super) fn application_layout_active_layer_names(&self) -> Vec<String> {
+        self.application_layout_settings()
+            .and_then(|settings| settings.active_layout())
+            .map(|layout| layout.layer_names.clone())
+            .unwrap_or_else(crate::application_layouts::default_layer_names)
+    }
+
+    pub(super) fn application_layout_current_key_binding(
+        &self,
+        key_index: usize,
+    ) -> Option<crate::keyboard::KeyBinding> {
+        if !self.application_layout_editor_active {
+            return None;
+        }
+        let layout = self.layout.as_ref()?;
+        let control = Self::application_control_for_key(layout, key_index)?;
+        self.application_layout_settings()
+            .and_then(|settings| settings.editor_layout())
+            .and_then(|profile| profile.layers.get(self.selected_layer))
+            .map(|keycodes| crate::keyboard::KeyBinding::Vial(keycodes[control]))
+    }
+
+    pub(super) fn application_layout_current_encoder_keycode(
+        &self,
+        visual_index: usize,
+    ) -> Option<u16> {
+        if !self.application_layout_editor_active {
+            return None;
+        }
+        let layout = self.layout.as_ref()?;
+        let control = Self::application_control_for_encoder(layout, visual_index)?;
+        self.application_layout_settings()
+            .and_then(|settings| settings.editor_layout())
+            .and_then(|profile| profile.layers.get(self.selected_layer))
+            .map(|keycodes| keycodes[control])
+    }
+
+    pub(super) fn assign_application_layout_key(
+        &mut self,
+        key_index: usize,
+        keycode: u16,
+    ) -> Option<bool> {
+        if !self.application_layout_editor_active {
+            return None;
+        }
+        let control = Self::application_control_for_key(self.layout.as_ref()?, key_index)?;
+        Some(self.assign_application_layout_control(self.selected_layer, control, keycode))
+    }
+
+    pub(super) fn assign_application_layout_encoder(
+        &mut self,
+        visual_index: usize,
+        keycode: u16,
+    ) -> Option<bool> {
+        if !self.application_layout_editor_active {
+            return None;
+        }
+        let control = Self::application_control_for_encoder(self.layout.as_ref()?, visual_index)?;
+        Some(self.assign_application_layout_control(self.selected_layer, control, keycode))
+    }
+
+    fn assign_application_layout_control(
+        &mut self,
+        layer: usize,
+        control: usize,
+        keycode: u16,
+    ) -> bool {
+        let changed = self
+            .application_layout_settings_mut()
+            .and_then(|settings| settings.editor_layout_mut())
+            .is_some_and(|layout| layout.set_keycode(layer, control, keycode));
+        if changed {
+            save_app_settings(&self.app_settings);
+            self.status_msg = app_layout_text(
+                self.app_settings.language,
+                "Раскладка приложения сохранена",
+                "Application layout saved",
+            )
+            .to_owned();
+        }
+        true
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn update_application_layout_runtime(&mut self) {
+        let discovered = crate::app_discovery::application_discovery_snapshot();
+        let foreground_changed = self.application_layout_foreground != discovered.foreground;
+        self.application_layout_foreground = discovered.foreground.clone();
+        self.application_discovery = discovered;
+
+        let Some(device_key) = self.application_layout_device_key() else {
+            let inactive = crate::application_layouts::ApplicationLayoutSnapshot::inactive();
+            for bridge in self
+                .qmk_hid_hosts
+                .values()
+                .filter(|bridge| bridge.supports_application_layouts())
+            {
+                bridge.set_application_layout_snapshot(inactive.clone());
+            }
+            return;
+        };
+        let seed = self.layout.as_ref().map(Self::base_application_layers);
+        let foreground_status = self.application_discovery.foreground_status.clone();
+        let mut persist = false;
+        let (snapshot, active_layout_followed, active_layout_changed) = {
+            let settings = self
+                .app_settings
+                .application_layouts
+                .entry(device_key)
+                .or_default();
+            persist |= settings.normalize();
+            persist |=
+                settings.enrich_application_identities(&self.application_discovery.available);
+            if let Some(seed) = seed {
+                for layout in settings.layouts.values_mut() {
+                    persist |= layout.seed_unset_keycodes(seed);
+                }
+            }
+            let resolved = resolve_layout_for_foreground(settings, &foreground_status.state);
+            let focused_layout_is_configured = match &foreground_status.state {
+                crate::app_discovery::ForegroundState::Focused(application) => {
+                    settings.layouts.get(&resolved).is_some_and(|layout| {
+                        layout.automatic_switching && layout.matches(application)
+                    })
+                }
+                _ => false,
+            };
+            let previous_active_layout_id = settings.active_layout_id.clone();
+            let active_layout_followed = apply_resolved_layout(
+                settings,
+                resolved,
+                foreground_changed && focused_layout_is_configured,
+            );
+            let active_layout_changed = settings.active_layout_id != previous_active_layout_id;
+            let snapshot = settings
+                .active_layout()
+                .map(crate::application_layouts::ApplicationLayoutSnapshot::from_layout)
+                .unwrap_or_else(crate::application_layouts::ApplicationLayoutSnapshot::inactive);
+            (snapshot, active_layout_followed, active_layout_changed)
+        };
+        if active_layout_changed {
+            // Firmware releases held keys and starts every newly activated
+            // application layout on layer 0. Keep the independent Layout
+            // Indicator state on that same source of truth.
+            self.reset_matrix_tester_state();
+        }
+        if active_layout_followed {
+            // Firmware starts an application layout on layer 0. Make the
+            // editor show that same layer and clear stale controls.
+            self.selected_layer = 0;
+            self.selected_key = None;
+            self.selected_encoder = None;
+        }
+        if persist {
+            save_app_settings(&self.app_settings);
+        }
+
+        if let Some(path) = self
+            .selected_device
+            .and_then(|index| self.device_manager.devices().get(index))
+            .map(|device| device.path.clone())
+        {
+            if let Some(bridge) = self.qmk_hid_hosts.get(&path) {
+                bridge.set_application_layout_snapshot(snapshot);
+            }
+        }
+    }
+}
+
+fn resolve_layout_for_foreground(
+    settings: &crate::application_layouts::DeviceApplicationLayouts,
+    foreground: &crate::app_discovery::ForegroundState,
+) -> String {
+    match foreground {
+        crate::app_discovery::ForegroundState::Focused(application) => {
+            settings.resolve(Some(application))
+        }
+        crate::app_discovery::ForegroundState::UnidentifiedWindow(_)
+        | crate::app_discovery::ForegroundState::NoFocusedWindow => settings.resolve(None),
+        crate::app_discovery::ForegroundState::BackendUnavailable(_) => {
+            // A detector failure is not an unknown application. Keep the last
+            // confirmed layout until the backend recovers.
+            settings.active_layout_id.clone()
+        }
+    }
+}
+
+fn apply_resolved_layout(
+    settings: &mut crate::application_layouts::DeviceApplicationLayouts,
+    resolved: String,
+    follow_editor_for_foreground_transition: bool,
+) -> bool {
+    let active_layout_changed = settings.active_layout_id != resolved;
+    if active_layout_changed {
+        settings.active_layout_id = resolved.clone();
+    }
+
+    // Keep the Layout page in sync once when the foreground application
+    // changes. Re-applying this on every runtime tick would immediately undo
+    // a layout the user selected manually for editing.
+    let should_follow_editor = active_layout_changed || follow_editor_for_foreground_transition;
+    let editor_layout_changed = should_follow_editor && settings.editor_layout_id != resolved;
+    if editor_layout_changed {
+        settings.editor_layout_id = resolved;
+    }
+    active_layout_changed || editor_layout_changed
+}
+
+pub(super) fn app_layout_text(
+    language: crate::i18n::Language,
+    russian: &'static str,
+    english: &'static str,
+) -> &'static str {
+    match language {
+        crate::i18n::Language::Russian => russian,
+        crate::i18n::Language::English => english,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::keyboard::PhysicalKey;
+
+    fn indicator_test_layout() -> KeyboardLayout {
+        KeyboardLayout {
+            name: "M4CR0Pad v3".to_owned(),
+            rows: 5,
+            cols: 3,
+            keys: vec![PhysicalKey {
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+                row: 1,
+                col: 0,
+                label: "1,0".to_owned(),
+                rotation: 0.0,
+                rotation_x: 0.0,
+                rotation_y: 0.0,
+                layout_condition: None,
+            }],
+            encoders: Vec::new(),
+            layers: (0..crate::application_layouts::APPLICATION_LAYOUT_LAYER_COUNT)
+                .map(|_| vec![crate::keyboard::KeyBinding::Vial(0x0027)])
+                .collect(),
+            encoder_layers: Vec::new(),
+            layer_names: crate::application_layouts::default_layer_names(),
+            custom_keycodes: Vec::new(),
+            layout_options: Vec::new(),
+            live_features: Default::default(),
+            supports_rgb: false,
+            lighting_mode: None,
+            firmware: FirmwareProtocol::Vial,
+        }
+    }
+
+    fn m4cr0pad_v3_device() -> crate::device::Device {
+        crate::device::Device {
+            name: "M4CR0Pad v3".to_owned(),
+            vendor_id: 0xE126,
+            product_id: 0x0042,
+            manufacturer: "Ergohaven".to_owned(),
+            serial_number: "indicator-test".to_owned(),
+            bus_type: "Usb".to_owned(),
+            path: "/dev/hidraw-indicator-test".to_owned(),
+            instance_token: "indicator-test-instance".to_owned(),
+            firmware: FirmwareProtocol::Vial,
+        }
+    }
+
+    #[test]
+    fn corrupt_product_string_does_not_hide_application_layouts() {
+        let device = crate::device::Device {
+            name: "Ль".to_owned(),
+            vendor_id: 0xE126,
+            product_id: 0x0042,
+            manufacturer: "Ergohaven".to_owned(),
+            serial_number: "test-pad".to_owned(),
+            bus_type: "Usb".to_owned(),
+            path: "/dev/hidraw4".to_owned(),
+            instance_token: "test-instance".to_owned(),
+            firmware: FirmwareProtocol::Vial,
+        };
+
+        assert!(device_supports_application_layouts(&device));
+    }
+
+    #[test]
+    fn detector_failure_keeps_last_confirmed_layout() {
+        let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+        let application = crate::application_layouts::DetectedApplication {
+            executable: "code".to_owned(),
+            identities: vec!["com.visualstudio.code".to_owned()],
+            display_name: "Visual Studio Code".to_owned(),
+            window_title: String::new(),
+        };
+        let layout_id = settings.create_for_application(&application);
+        settings.active_layout_id = layout_id.clone();
+
+        let resolved = resolve_layout_for_foreground(
+            &settings,
+            &crate::app_discovery::ForegroundState::BackendUnavailable("test failure".to_owned()),
+        );
+
+        assert_eq!(resolved, layout_id);
+    }
+
+    #[test]
+    fn no_focused_window_uses_configured_fallback_policy() {
+        let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+        let application = crate::application_layouts::DetectedApplication {
+            executable: "code".to_owned(),
+            identities: Vec::new(),
+            display_name: "Visual Studio Code".to_owned(),
+            window_title: String::new(),
+        };
+        let layout_id = settings.create_for_application(&application);
+        settings.active_layout_id = layout_id.clone();
+
+        assert_eq!(
+            resolve_layout_for_foreground(
+                &settings,
+                &crate::app_discovery::ForegroundState::NoFocusedWindow,
+            ),
+            crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID
+        );
+        settings.automatically_return_to_default = false;
+        assert_eq!(
+            resolve_layout_for_foreground(
+                &settings,
+                &crate::app_discovery::ForegroundState::NoFocusedWindow,
+            ),
+            layout_id
+        );
+    }
+
+    #[test]
+    fn active_application_transition_updates_the_layout_editor() {
+        let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+        let vscode =
+            settings.create_for_application(&crate::application_layouts::DetectedApplication {
+                executable: "code".to_owned(),
+                identities: vec!["com.visualstudio.code".to_owned()],
+                display_name: "Visual Studio Code".to_owned(),
+                window_title: String::new(),
+            });
+        let telegram =
+            settings.create_for_application(&crate::application_layouts::DetectedApplication {
+                executable: "telegram-desktop".to_owned(),
+                identities: vec!["org.telegram.desktop".to_owned()],
+                display_name: "Telegram".to_owned(),
+                window_title: String::new(),
+            });
+        settings.active_layout_id = vscode.clone();
+        settings.editor_layout_id = vscode;
+
+        assert!(apply_resolved_layout(&mut settings, telegram.clone(), true));
+        assert_eq!(settings.active_layout_id, telegram);
+        assert_eq!(settings.editor_layout_id, settings.active_layout_id);
+    }
+
+    #[test]
+    fn manual_editor_selection_is_kept_without_an_active_layout_transition() {
+        let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+        let vscode =
+            settings.create_for_application(&crate::application_layouts::DetectedApplication {
+                executable: "code".to_owned(),
+                identities: Vec::new(),
+                display_name: "Visual Studio Code".to_owned(),
+                window_title: String::new(),
+            });
+        let telegram =
+            settings.create_for_application(&crate::application_layouts::DetectedApplication {
+                executable: "telegram-desktop".to_owned(),
+                identities: Vec::new(),
+                display_name: "Telegram".to_owned(),
+                window_title: String::new(),
+            });
+        settings.active_layout_id = vscode.clone();
+        settings.editor_layout_id = telegram.clone();
+
+        assert!(!apply_resolved_layout(&mut settings, vscode.clone(), false));
+        assert_eq!(settings.active_layout_id, vscode);
+        assert_eq!(settings.editor_layout_id, telegram);
+    }
+
+    #[test]
+    fn focused_configured_app_repairs_a_stale_editor_selection_on_startup() {
+        let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+        let vscode =
+            settings.create_for_application(&crate::application_layouts::DetectedApplication {
+                executable: "code".to_owned(),
+                identities: Vec::new(),
+                display_name: "Visual Studio Code".to_owned(),
+                window_title: String::new(),
+            });
+        settings.active_layout_id = vscode.clone();
+        settings.editor_layout_id =
+            crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID.to_owned();
+
+        assert!(apply_resolved_layout(&mut settings, vscode.clone(), true));
+        assert_eq!(settings.active_layout_id, vscode);
+        assert_eq!(settings.editor_layout_id, settings.active_layout_id);
+    }
+
+    #[test]
+    fn configured_app_follows_once_then_keeps_a_manual_editor_selection() {
+        let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+        let ticktick =
+            settings.create_for_application(&crate::application_layouts::DetectedApplication {
+                executable: "ticktick".to_owned(),
+                identities: vec!["ticktick_ticktick.desktop".to_owned()],
+                display_name: "TickTick".to_owned(),
+                window_title: String::new(),
+            });
+        let telegram =
+            settings.create_for_application(&crate::application_layouts::DetectedApplication {
+                executable: "telegram-desktop".to_owned(),
+                identities: Vec::new(),
+                display_name: "Telegram".to_owned(),
+                window_title: String::new(),
+            });
+        settings.active_layout_id =
+            crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID.to_owned();
+        settings.editor_layout_id =
+            crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID.to_owned();
+
+        // A real foreground transition follows TickTick once.
+        assert!(apply_resolved_layout(&mut settings, ticktick.clone(), true));
+        assert_eq!(settings.active_layout_id, ticktick);
+        assert_eq!(settings.editor_layout_id, settings.active_layout_id);
+
+        // Selecting another profile for editing must survive later runtime
+        // ticks while TickTick remains the focused application.
+        settings.editor_layout_id = telegram.clone();
+        let still_active = settings.active_layout_id.clone();
+        assert!(!apply_resolved_layout(&mut settings, still_active, false));
+        assert_eq!(settings.editor_layout_id, telegram);
+    }
+
+    #[test]
+    fn layout_indicator_uses_active_profile_not_manually_selected_editor_profile() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        app.device_manager
+            .replace_devices(vec![m4cr0pad_v3_device()]);
+        app.selected_device = Some(0);
+        app.current_device_name = "M4CR0Pad v3".to_owned();
+
+        let device_key = app
+            .application_layout_device_key()
+            .expect("M4CR0Pad v3 must support application layouts");
+        let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+        let editor =
+            settings.create_for_application(&crate::application_layouts::DetectedApplication {
+                executable: "code".to_owned(),
+                identities: Vec::new(),
+                display_name: "VS Code".to_owned(),
+                window_title: String::new(),
+            });
+        let active =
+            settings.create_for_application(&crate::application_layouts::DetectedApplication {
+                executable: "gnome-calculator".to_owned(),
+                identities: Vec::new(),
+                display_name: "Calculator".to_owned(),
+                window_title: String::new(),
+            });
+        settings
+            .layouts
+            .get_mut(&editor)
+            .unwrap()
+            .set_keycode(0, 0, 0x0004);
+        let active_profile = settings.layouts.get_mut(&active).unwrap();
+        active_profile.set_keycode(0, 0, 0x0005);
+        active_profile.set_layer_name(0, "каль".to_owned());
+        settings.editor_layout_id = editor;
+        settings.active_layout_id = active;
+        app.app_settings
+            .application_layouts
+            .insert(device_key, settings);
+
+        let base = indicator_test_layout();
+        let editor_rendered = app.application_layout_rendered_copy(&base);
+        let indicator_rendered = app.application_layout_active_rendered_copy(&base);
+
+        assert_eq!(editor_rendered.get_keycode(0, 0), 0x0004);
+        assert_eq!(indicator_rendered.get_keycode(0, 0), 0x0005);
+        assert_eq!(app.application_layout_active_layer_names()[0], "каль");
+    }
+}

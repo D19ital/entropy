@@ -1,7 +1,10 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod app;
+#[cfg(not(target_arch = "wasm32"))]
+mod app_discovery;
 pub(crate) mod app_icon;
+mod application_layouts;
 mod device;
 mod diagnostics;
 mod firmware;

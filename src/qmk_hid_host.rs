@@ -796,6 +796,7 @@ pub struct QmkHidHostBridge {
     thread: Option<JoinHandle<()>>,
     send_shutdown_on_drop: Arc<AtomicBool>,
     layout_snapshot: Arc<AtomicU8>,
+    application_layout_snapshot: Arc<Mutex<crate::application_layouts::ApplicationLayoutSnapshot>>,
 }
 
 impl QmkHidHostBridge {
@@ -816,6 +817,9 @@ impl QmkHidHostBridge {
             thread: None,
             send_shutdown_on_drop: Arc::new(AtomicBool::new(true)),
             layout_snapshot: Arc::new(AtomicU8::new(u8::MAX)),
+            application_layout_snapshot: Arc::new(Mutex::new(
+                crate::application_layouts::ApplicationLayoutSnapshot::inactive(),
+            )),
         }
     }
 
@@ -901,6 +905,10 @@ impl QmkHidHostBridge {
         let worker_output = shared_output.clone();
         let layout_snapshot = Arc::new(AtomicU8::new(u8::MAX));
         let worker_layout = layout_snapshot.clone();
+        let application_layout_snapshot = Arc::new(Mutex::new(
+            crate::application_layouts::ApplicationLayoutSnapshot::inactive(),
+        ));
+        let worker_application_layout = application_layout_snapshot.clone();
         let send_shutdown_on_drop = Arc::new(AtomicBool::new(true));
         let worker_shutdown = send_shutdown_on_drop.clone();
         let thread = thread::spawn(move || {
@@ -910,6 +918,7 @@ impl QmkHidHostBridge {
                 worker_output,
                 worker_control,
                 worker_layout,
+                worker_application_layout,
                 protocol,
                 worker_shutdown,
                 desktop,
@@ -925,7 +934,22 @@ impl QmkHidHostBridge {
             thread: Some(thread),
             send_shutdown_on_drop,
             layout_snapshot,
+            application_layout_snapshot,
         }
+    }
+
+    pub(crate) fn set_application_layout_snapshot(
+        &self,
+        snapshot: crate::application_layouts::ApplicationLayoutSnapshot,
+    ) {
+        *self
+            .application_layout_snapshot
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = snapshot;
+    }
+
+    pub(crate) fn supports_application_layouts(&self) -> bool {
+        self.device.is_m4cr0pad_v3()
     }
 
     pub fn layout_label(&self) -> Option<&'static str> {
@@ -1008,6 +1032,7 @@ fn run_bridge(
     mut shared_output: Option<crate::hid::SharedHidOutput>,
     control: Arc<BridgeTransportControl>,
     layout_snapshot: Arc<AtomicU8>,
+    application_layout_snapshot: Arc<Mutex<crate::application_layouts::ApplicationLayoutSnapshot>>,
     mut protocol: HostProtocol,
     send_shutdown: Arc<AtomicBool>,
     desktop: HostDataService,
@@ -1017,6 +1042,7 @@ fn run_bridge(
     ) -> anyhow::Result<HostDataHid>,
 ) {
     let stop = &control.stop;
+    let application_layouts_enabled = target.is_m4cr0pad_v3();
     let mut extended_protocol = false;
     let mut device: Option<HostDataHid> = None;
     let mut last_open_attempt = Instant::now() - Duration::from_secs(5);
@@ -1031,6 +1057,8 @@ fn run_bridge(
     let mut last_media_poll = Instant::now() - Duration::from_secs(60);
     let mut last_media_full_send = Instant::now() - Duration::from_secs(60);
     let mut last_layout_full_send = Instant::now();
+    let mut last_application_layout = None;
+    let mut last_application_layout_send = Instant::now() - Duration::from_secs(60);
     let mut desktop_subscription = None;
 
     while !stop.load(Ordering::Relaxed) {
@@ -1057,6 +1085,7 @@ fn run_bridge(
             last_media_poll = Instant::now() - Duration::from_secs(60);
             last_media_full_send = Instant::now() - Duration::from_secs(60);
             reset_layout_sync_state(&mut last_layout, &mut last_layout_full_send);
+            last_application_layout = None;
             log::info!(
                 "qmk-hid-host bridge adopted selected HID owner target={:?} extended={extended_protocol}",
                 target.path,
@@ -1087,6 +1116,7 @@ fn run_bridge(
             if let Some(dev) = device.as_ref() {
                 extended_protocol = mode.time && protocol.extended(dev);
                 reset_layout_sync_state(&mut last_layout, &mut last_layout_full_send);
+                last_application_layout = None;
                 log::info!(
                     "qmk-hid-host bridge started ({}) target={:?} protocol={protocol:?} extended={extended_protocol}",
                     if device.as_ref().is_some_and(HostDataHid::uses_shared_output) {
@@ -1117,11 +1147,41 @@ fn run_bridge(
             protocol.connection_lost();
             last_time = None;
             reset_layout_sync_state(&mut last_layout, &mut last_layout_full_send);
+            last_application_layout = None;
             thread::sleep(Duration::from_millis(250));
             continue;
         }
 
         let mut write_failed = false;
+
+        if application_layouts_enabled {
+            let application_layout = application_layout_snapshot
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone();
+            let snapshot_changed = last_application_layout.as_ref() != Some(&application_layout);
+            if snapshot_changed {
+                let mut sent = true;
+                for packet in application_layout.packets() {
+                    if write_payload(dev, &packet).is_err() {
+                        sent = false;
+                        write_failed = true;
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(1));
+                }
+                if sent {
+                    last_application_layout = Some(application_layout);
+                    last_application_layout_send = Instant::now();
+                }
+            } else if last_application_layout_send.elapsed() >= Duration::from_secs(1) {
+                if write_payload(dev, &application_layout.keepalive_packet()).is_err() {
+                    write_failed = true;
+                } else {
+                    last_application_layout_send = Instant::now();
+                }
+            }
+        }
 
         if mode.time && last_time_poll.elapsed() >= Duration::from_secs(1) {
             last_time_poll = Instant::now();
@@ -1240,6 +1300,7 @@ fn run_bridge(
             last_time = None;
             last_volume = None;
             reset_layout_sync_state(&mut last_layout, &mut last_layout_full_send);
+            last_application_layout = None;
             last_artist.clear();
             last_title.clear();
             last_media_full_send = Instant::now() - Duration::from_secs(60);
@@ -1250,6 +1311,14 @@ fn run_bridge(
 
     if send_shutdown.load(Ordering::Relaxed) {
         if let Some(device) = device.as_ref() {
+            if application_layouts_enabled {
+                for packet in
+                    crate::application_layouts::ApplicationLayoutSnapshot::inactive().packets()
+                {
+                    let _ = write_payload(device, &packet);
+                    thread::sleep(Duration::from_millis(1));
+                }
+            }
             send_shutdown_payloads(device, mode, extended_protocol);
         } else if let Some(output) = shared_output.as_ref() {
             // A successor stopped before opening must also finish any retained
@@ -2591,6 +2660,9 @@ mod host_protocol_tests {
                     output,
                     worker_control,
                     Arc::new(AtomicU8::new(u8::MAX)),
+                    Arc::new(Mutex::new(
+                        crate::application_layouts::ApplicationLayoutSnapshot::inactive(),
+                    )),
                     HostProtocol::Selected(extended),
                     Arc::new(AtomicBool::new(true)),
                     HostDataService::start(|| {
@@ -2988,6 +3060,9 @@ pub(crate) fn test_bridge_holding_transport(
             protocol: HostProtocol::Discover,
             send_shutdown_on_drop: Arc::new(AtomicBool::new(true)),
             layout_snapshot: Arc::new(AtomicU8::new(u8::MAX)),
+            application_layout_snapshot: Arc::new(Mutex::new(
+                crate::application_layouts::ApplicationLayoutSnapshot::inactive(),
+            )),
             shared_output: None,
             control,
             thread: Some(thread),

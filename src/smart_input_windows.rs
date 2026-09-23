@@ -43,7 +43,7 @@ unsafe fn process_name_lower_for_hwnd(hwnd: HWND) -> Option<String> {
         .map(|name| name.to_ascii_lowercase())
 }
 #[cfg(target_os = "windows")]
-fn foreground_app_candidate() -> Option<TextExpanderAppCandidate> {
+pub(super) fn foreground_app_candidate() -> Option<TextExpanderAppCandidate> {
     unsafe { app_candidate_for_hwnd(GetForegroundWindow()) }
 }
 

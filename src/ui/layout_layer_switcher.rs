@@ -1,3 +1,4 @@
+use super::application_layout_runtime::app_layout_text;
 use super::*;
 
 pub(super) const MAIN_MENU_BATTERY_RESERVED_H: f32 = 34.0;
@@ -50,6 +51,87 @@ fn layer_name_edit_is_available(hid_busy: bool, background_layers_pending: bool)
 }
 
 impl EntropyApp {
+    fn draw_application_layout_switcher(&mut self, ui: &mut egui::Ui, center_x: f32, bar_y: f32) {
+        let options = self.application_layout_editor_options();
+        if options.is_empty() {
+            return;
+        }
+        let current_id = self
+            .application_layout_settings()
+            .map(|settings| settings.editor_layout_id.clone())
+            .unwrap_or_else(|| {
+                crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID.to_owned()
+            });
+        let current_index = options
+            .iter()
+            .position(|(id, _)| id == &current_id)
+            .unwrap_or(0);
+        let current_name = options[current_index].1.clone();
+        let selector_width = 300.0;
+        let selector_height = 38.0;
+        let selector_rect = egui::Rect::from_center_size(
+            egui::pos2(center_x, bar_y + 30.0),
+            egui::vec2(selector_width, selector_height),
+        );
+        let dropdown_id = ui.make_persistent_id("layout_page_application_selector");
+        let response = ui.allocate_rect(selector_rect, Sense::click());
+        let fill = if self.dark_mode {
+            Color32::from_rgb(48, 48, 51)
+        } else {
+            Color32::from_rgb(245, 245, 247)
+        };
+        ui.painter().rect(
+            selector_rect,
+            8.0,
+            fill,
+            egui::Stroke::new(1.0_f32, crate::ui_style::border_color(self.dark_mode)),
+            egui::StrokeKind::Inside,
+        );
+        ui.painter().text(
+            egui::pos2(selector_rect.left() + 14.0, selector_rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            current_name,
+            FontId::proportional(15.0),
+            ui.visuals().text_color(),
+        );
+        ui.painter().text(
+            egui::pos2(selector_rect.right() - 14.0, selector_rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            "⌄",
+            FontId::proportional(18.0),
+            app_muted_text(self.dark_mode),
+        );
+        if response.clicked() {
+            egui::Popup::toggle_id(ui.ctx(), dropdown_id);
+        }
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        crate::ui_style::popup_below_widget(
+            ui,
+            dropdown_id,
+            &response,
+            egui::PopupCloseBehavior::CloseOnClickOutside,
+            |ui| {
+                ui.set_min_width(selector_width);
+                ui.spacing_mut().item_spacing = egui::vec2(0.0, 2.0);
+                for (id, name) in &options {
+                    if ui.selectable_label(id == &current_id, name).clicked() {
+                        self.select_application_layout_for_editing(id);
+                        egui::Popup::close_id(ui.ctx(), dropdown_id);
+                    }
+                }
+            },
+        );
+        ui.painter().text(
+            egui::pos2(center_x, bar_y + 3.0),
+            egui::Align2::CENTER_CENTER,
+            app_layout_text(self.app_settings.language, "РАСКЛАДКА", "LAYOUT"),
+            FontId::proportional(10.5),
+            app_muted_text(self.dark_mode),
+        );
+    }
+
     fn main_menu_battery_status(&self) -> MainMenuBatteryStatus {
         main_menu_battery_status(
             self.device_about_info
@@ -123,14 +205,30 @@ impl EntropyApp {
         main_tabs_h: f32,
         layer_bar_h: f32,
     ) {
+        let application_selector_offset = if self.application_layout_editor_active {
+            let center_x = ui.max_rect().center().x;
+            let bar_y = top_base_y + main_tabs_h + 18.0;
+            self.draw_application_layout_switcher(ui, center_x, bar_y);
+            58.0
+        } else {
+            0.0
+        };
         // ── Layer switcher ─────────────────────────────────────────────────
         {
-            let layer_count = self.layer_count;
+            let layer_count = if self.application_layout_editor_active {
+                crate::application_layouts::APPLICATION_LAYOUT_LAYER_COUNT
+            } else {
+                self.layer_count
+            };
             let selected = self.selected_layer;
+            let editor_layer_names = self
+                .application_layout_editor_active
+                .then(|| self.application_layout_editor_layer_names());
             // raw_name — чистое имя без префикса, хранится в layer_names
-            let raw_name = self
-                .layer_names
-                .get(selected)
+            let raw_name = editor_layer_names
+                .as_ref()
+                .and_then(|names| names.get(selected))
+                .or_else(|| self.layer_names.get(selected))
                 .cloned()
                 .unwrap_or_else(|| selected.to_string());
             let visible_raw_name: String = raw_name.chars().take(12).collect();
@@ -142,7 +240,7 @@ impl EntropyApp {
             };
             let name = display_name;
             let center_x = ui.max_rect().center().x;
-            let bar_y = top_base_y + main_tabs_h + 24.0;
+            let bar_y = top_base_y + main_tabs_h + 24.0 + application_selector_offset;
             let mid_y = bar_y + layer_bar_h / 2.0;
             // Layer name / edit field
             let name_rect = egui::Rect::from_min_size(
@@ -205,26 +303,31 @@ impl EntropyApp {
                             self.editing_layer_text = raw_name.clone();
                         } else {
                             let new_name = proposed_name;
-                            while self.layer_names.len() <= selected {
-                                self.layer_names.push(self.layer_names.len().to_string());
-                            }
-                            self.layer_names[selected] = new_name.clone();
-                            #[cfg(not(target_arch = "wasm32"))]
-                            save_layer_names(&self.layer_names, &self.current_device_name);
-                            #[cfg(target_arch = "wasm32")]
-                            save_layer_names(&self.layer_names, "default");
-                            // Also write name back to the connected device
-                            #[cfg(not(target_arch = "wasm32"))]
-                            if self.firmware == FirmwareProtocol::Vial {
-                                if let Some(dev) = &self.hid_device {
-                                    if let Err(e) =
-                                        dev.set_qmk_setting_string(200 + selected as u16, &new_name)
-                                    {
-                                        log::warn!(
-                                            "Vial set_qmk_setting_string failed for layer {}: {}",
-                                            selected,
-                                            e
-                                        );
+                            if self.application_layout_editor_active {
+                                self.rename_application_layout_layer(selected, new_name);
+                            } else {
+                                while self.layer_names.len() <= selected {
+                                    self.layer_names.push(self.layer_names.len().to_string());
+                                }
+                                self.layer_names[selected] = new_name.clone();
+                                #[cfg(not(target_arch = "wasm32"))]
+                                save_layer_names(&self.layer_names, &self.current_device_name);
+                                #[cfg(target_arch = "wasm32")]
+                                save_layer_names(&self.layer_names, "default");
+                                // Also write name back to the connected device
+                                #[cfg(not(target_arch = "wasm32"))]
+                                if self.firmware == FirmwareProtocol::Vial {
+                                    if let Some(dev) = &self.hid_device {
+                                        if let Err(e) = dev.set_qmk_setting_string(
+                                            200 + selected as u16,
+                                            &new_name,
+                                        ) {
+                                            log::warn!(
+                                                "Vial set_qmk_setting_string failed for layer {}: {}",
+                                                selected,
+                                                e
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -307,10 +410,11 @@ impl EntropyApp {
                     self.jump_back_stack.clear();
                 }
                 #[cfg(not(target_arch = "wasm32"))]
-                let layer_name_edit_available = layer_name_edit_is_available(
-                    self.hid_write_task_active(),
-                    self.deferred_device_load.next_unloaded_layer().is_some(),
-                );
+                let layer_name_edit_available = self.application_layout_editor_active
+                    || layer_name_edit_is_available(
+                        self.hid_write_task_active(),
+                        self.deferred_device_load.next_unloaded_layer().is_some(),
+                    );
                 #[cfg(target_arch = "wasm32")]
                 let layer_name_edit_available = true;
                 if name_r.hovered() && layer_name_edit_available {
@@ -448,10 +552,11 @@ mod tests {
 
     #[test]
     fn wheel_event_moves_exactly_one_layer_without_wrapping() {
-        assert_eq!(layer_after_wheel(0, 6, -120.0), 1);
-        assert_eq!(layer_after_wheel(1, 6, 120.0), 0);
-        assert_eq!(layer_after_wheel(5, 6, -120.0), 5);
-        assert_eq!(layer_after_wheel(0, 6, 120.0), 0);
+        assert_eq!(layer_after_wheel(0, 16, -120.0), 1);
+        assert_eq!(layer_after_wheel(1, 16, 120.0), 0);
+        assert_eq!(layer_after_wheel(14, 16, -120.0), 15);
+        assert_eq!(layer_after_wheel(15, 16, -120.0), 15);
+        assert_eq!(layer_after_wheel(0, 16, 120.0), 0);
     }
 
     #[test]

@@ -100,6 +100,22 @@ impl EntropyApp {
             settings_write_generation: 0,
             #[cfg(not(target_arch = "wasm32"))]
             qmk_hid_hosts: std::collections::HashMap::new(),
+            application_layout_editor_active: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            application_discovery: Default::default(),
+            #[cfg(target_os = "linux")]
+            gnome_integration_install_task: None,
+            #[cfg(target_os = "linux")]
+            gnome_integration_install_result: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            application_layout_foreground: None,
+            application_picker_open: false,
+            application_picker_assign_existing: false,
+            application_picker_search: String::new(),
+            application_manual_executable: String::new(),
+            application_picker_selected: None,
+            application_picker_layout_name: String::new(),
+            application_picker_title_contains: String::new(),
             pending_device_connect: None,
             firmware: FirmwareProtocol::Vial,
             #[cfg(not(target_arch = "wasm32"))]

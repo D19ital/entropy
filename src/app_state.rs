@@ -37,6 +37,11 @@ pub(crate) struct SavedPictogram {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct AppSettings {
+    /// Per-device application layouts. Kept in Entropy settings so the base
+    /// Vial keymap remains the reliable fallback when Entropy is not running.
+    #[serde(default)]
+    pub(crate) application_layouts:
+        std::collections::BTreeMap<String, crate::application_layouts::DeviceApplicationLayouts>,
     #[serde(default)]
     pub(crate) minimize_to_tray_on_close: bool,
     #[serde(default)]
@@ -190,6 +195,7 @@ pub(crate) fn clamp_ui_scale(scale: f32) -> f32 {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            application_layouts: std::collections::BTreeMap::new(),
             minimize_to_tray_on_close: false,
             close_to_tray_behavior: CloseToTrayBehavior::Ask,
             launch_at_startup: false,
@@ -3254,6 +3260,7 @@ pub(crate) enum ComboPickField {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingsTab {
     AppSettings,
+    ApplicationLayouts,
     MatrixTester,
     TextExpanderSetup,
     TextExpander,
@@ -5180,6 +5187,27 @@ pub struct EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) qmk_hid_hosts:
         std::collections::HashMap<String, crate::qmk_hid_host::QmkHidHostBridge>,
+    /// True while the normal keyboard canvas edits the selected application
+    /// layout instead of writing the permanent Vial keymap.
+    pub(crate) application_layout_editor_active: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) application_discovery: crate::app_discovery::ApplicationDiscoverySnapshot,
+    #[cfg(target_os = "linux")]
+    pub(crate) gnome_integration_install_task:
+        Option<crate::app_discovery::GnomeIntegrationInstallTask>,
+    #[cfg(target_os = "linux")]
+    pub(crate) gnome_integration_install_result:
+        Option<Result<crate::app_discovery::GnomeIntegrationInstallReport, String>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) application_layout_foreground:
+        Option<crate::application_layouts::DetectedApplication>,
+    pub(crate) application_picker_open: bool,
+    pub(crate) application_picker_assign_existing: bool,
+    pub(crate) application_picker_search: String,
+    pub(crate) application_manual_executable: String,
+    pub(crate) application_picker_selected: Option<crate::application_layouts::DetectedApplication>,
+    pub(crate) application_picker_layout_name: String,
+    pub(crate) application_picker_title_contains: String,
     /// Current firmware type (mirrors layout.firmware)
     pub(crate) firmware: FirmwareProtocol,
     /// QMK setting ids the connected firmware exposes (from the connect probe).
