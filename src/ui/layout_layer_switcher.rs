@@ -117,7 +117,7 @@ impl EntropyApp {
                 ui.spacing_mut().item_spacing = egui::vec2(0.0, 2.0);
                 for (id, name) in &options {
                     if ui.selectable_label(id == &current_id, name).clicked() {
-                        self.select_application_layout_for_editing(id);
+                        self.activate_application_layout(id);
                         egui::Popup::close_id(ui.ctx(), dropdown_id);
                     }
                 }

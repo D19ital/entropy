@@ -109,6 +109,8 @@ impl EntropyApp {
             gnome_integration_install_result: None,
             #[cfg(not(target_arch = "wasm32"))]
             application_layout_foreground: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            application_layout_manual_override: None,
             application_picker_open: false,
             application_picker_assign_existing: false,
             application_picker_target_layout_id: None,

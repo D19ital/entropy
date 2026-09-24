@@ -5201,6 +5201,15 @@ pub struct EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) application_layout_foreground:
         Option<crate::application_layouts::DetectedApplication>,
+    /// A layout selected from the main Layout page stays active until focus
+    /// moves to a different application. Store both the device and foreground
+    /// application captured at selection time so polling the same window
+    /// cannot immediately undo the user's choice.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) application_layout_manual_override: Option<(
+        String,
+        Option<crate::application_layouts::DetectedApplication>,
+    )>,
     pub(crate) application_picker_open: bool,
     pub(crate) application_picker_assign_existing: bool,
     /// Stable profile selected when the edit dialog opens. Foreground changes

@@ -216,8 +216,8 @@ pub(crate) struct DeviceApplicationLayouts {
     #[serde(default = "default_layout_id")]
     pub(crate) active_layout_id: String,
     /// Automatically return to Default when the focused window does not match
-    /// any enabled application layout. Known applications always switch to
-    /// their own layout regardless of this option.
+    /// a configured application. A known application with automatic switching
+    /// disabled preserves the current manually selected layout.
     #[serde(
         default = "default_true",
         rename = "automatically_return_to_default",
@@ -478,10 +478,17 @@ impl DeviceApplicationLayouts {
     }
 
     pub(crate) fn resolve(&self, application: Option<&DetectedApplication>) -> String {
+        let active_or_default = || {
+            if self.layouts.contains_key(&self.active_layout_id) {
+                self.active_layout_id.clone()
+            } else {
+                default_layout_id()
+            }
+        };
         let matched = application.and_then(|application| {
             self.layouts
                 .values()
-                .filter(|layout| layout.automatic_switching && layout.matches(application))
+                .filter(|layout| layout.matches(application))
                 .max_by(|left, right| {
                     let rank = |layout: &&ApplicationLayout| {
                         (
@@ -502,15 +509,19 @@ impl DeviceApplicationLayouts {
                         // ambiguous duplicate rules. Lower ids win deterministically.
                         .then_with(|| right.id.cmp(&left.id))
                 })
-                .map(|layout| layout.id.clone())
+                .map(|layout| {
+                    if layout.automatic_switching {
+                        layout.id.clone()
+                    } else {
+                        active_or_default()
+                    }
+                })
         });
         matched.unwrap_or_else(|| {
             if self.automatically_return_to_default {
                 default_layout_id()
-            } else if self.layouts.contains_key(&self.active_layout_id) {
-                self.active_layout_id.clone()
             } else {
-                default_layout_id()
+                active_or_default()
             }
         })
     }
@@ -1503,16 +1514,15 @@ mod tests {
     #[test]
     fn automatic_switching_is_independent_per_layout() {
         let mut settings = DeviceApplicationLayouts::default();
+        let manual = settings.create_for_application(&app("calculator", "Calculator"));
         let figma = settings.create_for_application(&app("figma", "Draft"));
+        settings.active_layout_id = manual.clone();
         settings
             .layouts
             .get_mut(&figma)
             .unwrap()
             .automatic_switching = false;
-        assert_eq!(
-            settings.resolve(Some(&app("figma", "Draft"))),
-            DEFAULT_APPLICATION_LAYOUT_ID
-        );
+        assert_eq!(settings.resolve(Some(&app("figma", "Draft"))), manual);
         settings
             .layouts
             .get_mut(&figma)

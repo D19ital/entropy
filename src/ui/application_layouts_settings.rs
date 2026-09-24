@@ -162,7 +162,12 @@ impl EntropyApp {
         let Some(device_key) = self.application_layout_device_key() else {
             return;
         };
-        let Some(snapshot) = self.app_settings.application_layouts.get(&device_key) else {
+        let Some(snapshot) = self
+            .app_settings
+            .application_layouts
+            .get(&device_key)
+            .cloned()
+        else {
             return;
         };
         let mut selected_id = snapshot.editor_layout_id.clone();
@@ -211,8 +216,8 @@ impl EntropyApp {
             true,
             Some(app_layout_text(
                 language,
-                "Общая настройка для всех раскладок. Настроенные приложения всегда переключаются на свои раскладки. Если включено, любое другое окно возвращает Default. Если выключено, сохраняется последняя распознанная раскладка.",
-                "Global setting for all layouts. Configured applications always switch to their own layouts. When enabled, any other window returns to Default. When disabled, the last recognized layout stays active.",
+                "Общая настройка для всех раскладок. Приложения с включённым автопереключением активируют свои раскладки. Приложения с выключенным автопереключением сохраняют ручной выбор. Если включено, любое другое окно возвращает Default.",
+                "Global setting for all layouts. Applications with automatic switching enabled activate their layouts. Applications with it disabled preserve the manual selection. When enabled, any other window returns to Default.",
             )),
             metrics.value(46.0),
             |ui| {
@@ -277,11 +282,8 @@ impl EntropyApp {
             },
         );
 
-        if let Some(settings) = self.app_settings.application_layouts.get_mut(&device_key) {
-            if settings.editor_layout_id != selected_id {
-                settings.editor_layout_id = selected_id.clone();
-                changed = true;
-            }
+        if snapshot.editor_layout_id != selected_id {
+            self.activate_application_layout(&selected_id);
         }
 
         let selected = self

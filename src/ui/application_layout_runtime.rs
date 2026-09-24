@@ -62,20 +62,39 @@ impl EntropyApp {
         layouts
     }
 
-    pub(super) fn select_application_layout_for_editing(&mut self, id: &str) -> bool {
-        let changed = self
+    pub(super) fn activate_application_layout(&mut self, id: &str) -> bool {
+        let Some(device_key) = self.application_layout_device_key() else {
+            return false;
+        };
+        let (changed, active_changed) = self
             .application_layout_settings_mut()
-            .is_some_and(|settings| {
-                if !settings.layouts.contains_key(id) || settings.editor_layout_id == id {
-                    return false;
+            .map(|settings| {
+                if !settings.layouts.contains_key(id) {
+                    return (false, false);
                 }
-                settings.editor_layout_id = id.to_owned();
-                true
-            });
+                let active_changed = settings.active_layout_id != id;
+                let editor_changed = settings.editor_layout_id != id;
+                if active_changed {
+                    settings.active_layout_id = id.to_owned();
+                }
+                if editor_changed {
+                    settings.editor_layout_id = id.to_owned();
+                }
+                (active_changed || editor_changed, active_changed)
+            })
+            .unwrap_or((false, false));
         if changed {
             self.selected_layer = 0;
             self.selected_key = None;
             self.selected_encoder = None;
+            if active_changed {
+                self.reset_matrix_tester_state();
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.application_layout_manual_override =
+                    Some((device_key, self.application_discovery.foreground.clone()));
+            }
             save_app_settings(&self.app_settings);
         }
         changed
@@ -298,6 +317,19 @@ impl EntropyApp {
         };
         let seed = self.layout.as_ref().map(Self::base_application_layers);
         let foreground_status = self.application_discovery.foreground_status.clone();
+        let manual_override_active = self
+            .application_layout_manual_override
+            .as_ref()
+            .is_some_and(|(override_device_key, override_foreground)| {
+                override_device_key == &device_key
+                    && same_foreground_application(
+                        override_foreground.as_ref(),
+                        self.application_discovery.foreground.as_ref(),
+                    )
+            });
+        if !manual_override_active {
+            self.application_layout_manual_override = None;
+        }
         let mut persist = false;
         let (snapshot, active_layout_followed, active_layout_changed) = {
             let settings = self
@@ -313,7 +345,11 @@ impl EntropyApp {
                     persist |= layout.seed_unset_keycodes(seed);
                 }
             }
-            let resolved = resolve_layout_for_foreground(settings, &foreground_status.state);
+            let resolved = resolve_layout_for_runtime(
+                settings,
+                &foreground_status.state,
+                manual_override_active,
+            );
             let focused_layout_is_configured = match &foreground_status.state {
                 crate::app_discovery::ForegroundState::Focused(application) => {
                     settings.layouts.get(&resolved).is_some_and(|layout| {
@@ -361,6 +397,34 @@ impl EntropyApp {
                 bridge.set_application_layout_snapshot(snapshot);
             }
         }
+    }
+}
+
+fn same_foreground_application(
+    left: Option<&crate::application_layouts::DetectedApplication>,
+    right: Option<&crate::application_layouts::DetectedApplication>,
+) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => crate::application_layouts::application_identities_match(
+            std::iter::once(left.executable.as_str())
+                .chain(left.identities.iter().map(String::as_str)),
+            std::iter::once(right.executable.as_str())
+                .chain(right.identities.iter().map(String::as_str)),
+        ),
+        (None, None) => true,
+        (Some(_), None) | (None, Some(_)) => false,
+    }
+}
+
+fn resolve_layout_for_runtime(
+    settings: &crate::application_layouts::DeviceApplicationLayouts,
+    foreground: &crate::app_discovery::ForegroundState,
+    manual_override_active: bool,
+) -> String {
+    if manual_override_active {
+        settings.active_layout_id.clone()
+    } else {
+        resolve_layout_for_foreground(settings, foreground)
     }
 }
 
@@ -634,6 +698,120 @@ mod tests {
         let still_active = settings.active_layout_id.clone();
         assert!(!apply_resolved_layout(&mut settings, still_active, false));
         assert_eq!(settings.editor_layout_id, telegram);
+    }
+
+    #[test]
+    fn main_layout_selection_activates_editor_indicator_and_runtime_snapshot() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        app.device_manager
+            .replace_devices(vec![m4cr0pad_v3_device()]);
+        app.selected_device = Some(0);
+        app.current_device_name = "M4CR0Pad v3".to_owned();
+        app.selected_layer = 7;
+        app.application_discovery.foreground =
+            Some(crate::application_layouts::DetectedApplication {
+                executable: "entropy".to_owned(),
+                identities: vec!["works.eh.Entropy".to_owned()],
+                display_name: "Entropy".to_owned(),
+                window_title: "Layout".to_owned(),
+            });
+
+        let device_key = app
+            .application_layout_device_key()
+            .expect("M4CR0Pad v3 must support application layouts");
+        let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+        let calculator =
+            settings.create_for_application(&crate::application_layouts::DetectedApplication {
+                executable: "calculator".to_owned(),
+                identities: vec!["org.gnome.Calculator".to_owned()],
+                display_name: "Calculator".to_owned(),
+                window_title: String::new(),
+            });
+        settings
+            .layouts
+            .get_mut(&calculator)
+            .unwrap()
+            .set_layer_name(0, "каль".to_owned());
+        app.app_settings
+            .application_layouts
+            .insert(device_key.clone(), settings);
+
+        assert!(app.activate_application_layout(&calculator));
+        let settings = app
+            .app_settings
+            .application_layouts
+            .get(&device_key)
+            .unwrap();
+        assert_eq!(settings.editor_layout_id, calculator);
+        assert_eq!(settings.active_layout_id, calculator);
+        assert_eq!(app.selected_layer, 0);
+        assert_eq!(app.application_layout_active_layer_names()[0], "каль");
+        assert_eq!(
+            app.application_layout_manual_override,
+            Some((device_key, app.application_discovery.foreground.clone()))
+        );
+    }
+
+    #[test]
+    fn manual_activation_is_kept_until_a_different_application_gets_focus() {
+        let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+        let calculator =
+            settings.create_for_application(&crate::application_layouts::DetectedApplication {
+                executable: "calculator".to_owned(),
+                identities: vec!["org.gnome.Calculator".to_owned()],
+                display_name: "Calculator".to_owned(),
+                window_title: String::new(),
+            });
+        let telegram =
+            settings.create_for_application(&crate::application_layouts::DetectedApplication {
+                executable: "telegram".to_owned(),
+                identities: vec!["org.telegram.desktop".to_owned()],
+                display_name: "Telegram".to_owned(),
+                window_title: String::new(),
+            });
+        settings.active_layout_id = calculator.clone();
+
+        let telegram_foreground = crate::app_discovery::ForegroundState::Focused(
+            crate::application_layouts::DetectedApplication {
+                executable: "telegram".to_owned(),
+                identities: vec!["org.telegram.desktop".to_owned()],
+                display_name: "Telegram".to_owned(),
+                window_title: "Chat".to_owned(),
+            },
+        );
+        assert_eq!(
+            resolve_layout_for_runtime(&settings, &telegram_foreground, true),
+            calculator
+        );
+        assert_eq!(
+            resolve_layout_for_runtime(&settings, &telegram_foreground, false),
+            telegram
+        );
+    }
+
+    #[test]
+    fn changing_only_the_window_title_does_not_end_a_manual_override() {
+        let first = crate::application_layouts::DetectedApplication {
+            executable: "com.apple.finder".to_owned(),
+            identities: vec!["Finder".to_owned()],
+            display_name: "Finder".to_owned(),
+            window_title: "Downloads".to_owned(),
+        };
+        let second = crate::application_layouts::DetectedApplication {
+            window_title: "Documents".to_owned(),
+            ..first.clone()
+        };
+        let other = crate::application_layouts::DetectedApplication {
+            executable: "com.apple.Safari".to_owned(),
+            identities: vec!["Safari".to_owned()],
+            display_name: "Safari".to_owned(),
+            window_title: String::new(),
+        };
+
+        assert!(same_foreground_application(Some(&first), Some(&second)));
+        assert!(!same_foreground_application(Some(&first), Some(&other)));
     }
 
     #[test]
