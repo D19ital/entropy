@@ -1,6 +1,6 @@
 use crate::keycode::{is_extended_function_key, KeycodeCategory};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BasicPickerLayout {
     Qwerty,
     Dvorak,
@@ -209,6 +209,7 @@ pub enum KeycodeTab {
 impl KeycodeTab {
     /// Every tab, including the ones the Vial picker reaches only through
     /// redirects or editors (Layers, Media, Macro, Tap Dance).
+    #[cfg(test)]
     pub const ALL: [KeycodeTab; 12] = [
         KeycodeTab::Basic,
         KeycodeTab::Symbols,

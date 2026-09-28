@@ -20,6 +20,9 @@ use keycode_picker_catalog::*;
 #[path = "keycode_picker_search.rs"]
 mod keycode_picker_search;
 use keycode_picker_search::*;
+#[path = "keycode_picker_rows.rs"]
+mod keycode_picker_rows;
+use keycode_picker_rows::*;
 #[path = "keycode_picker_ui.rs"]
 mod keycode_picker_ui;
 use keycode_picker_ui::*;
@@ -30,6 +33,7 @@ use keycode_picker_popups::*;
 mod keycode_picker_advanced;
 #[path = "keycode_picker_basic.rs"]
 mod keycode_picker_basic;
+use keycode_picker_basic::*;
 #[path = "keycode_picker_lighting_quantum.rs"]
 mod keycode_picker_lighting_quantum;
 #[path = "keycode_picker_macro.rs"]
@@ -39,6 +43,7 @@ pub(crate) use keycode_picker_macro::decode_macro_actions;
 mod keycode_picker_special;
 #[path = "keycode_picker_tabs.rs"]
 mod keycode_picker_tabs;
+use keycode_picker_tabs::*;
 #[path = "keycode_picker_tap_dance.rs"]
 mod keycode_picker_tap_dance;
 #[path = "keycode_picker_tap_dance_picker.rs"]
@@ -126,7 +131,7 @@ enum AdvancedSlotKind {
     TapDance,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 enum PickerValuePolicy {
     #[default]
     Any,
@@ -140,6 +145,9 @@ pub struct KeycodePicker {
     pub popup_view_mode: PickerViewMode,
     /// Search field state and cached results (keycode_picker_search.rs).
     search: PickerSearch,
+    /// Rows of every tab, rebuilt when the picker state changes
+    /// (keycode_picker_rows.rs).
+    row_cache: RowCache,
     pub result: Option<crate::keyboard::KeyBinding>,
     pub custom_keycodes: Vec<(String, String, String, u16)>,
     pub supports_rgb: bool,
@@ -685,100 +693,36 @@ mod tests {
     }
 }
 
+/// Universal Symbols as a section inside another chooser (e.g. the Tap Dance
+/// key picker). Returns the picked binding.
 fn show_universal_symbol_section(
     ui: &mut egui::Ui,
     language: crate::i18n::Language,
 ) -> Option<crate::keyboard::KeyBinding> {
-    let mut picked = None;
-
-    ui.label(
-        RichText::new(tr_picker(language, "key_picker.section_universal_symbols"))
-            .size(11.0)
-            .color(Color32::from_gray(150)),
+    show_section_heading(
+        ui,
+        tr_picker(language, "key_picker.section_universal_symbols"),
     );
-    ui.add_space(4.0);
-    ui.horizontal_wrapped(|ui| {
-        for control in crate::universal_symbols::CONTROLS {
-            let label = crate::universal_symbols::label_for_user_id(control.user_id)
-                .expect("universal symbol control should have a display label");
-            let resp = ui
-                .add_sized(
-                    KeycodePicker::picker_key_size(ui.ctx()),
-                    egui::Button::new(""),
-                )
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
-            KeycodePicker::paint_compact_picker_label(ui, &resp, &label);
-            if resp.clicked() {
-                picked = Some(crate::universal_symbols::binding(control.user_id));
-            }
-            resp.on_hover_text(crate::i18n::tr_text(language, control.name));
-        }
-        for symbol in crate::universal_symbols::SYMBOLS {
-            let label = crate::universal_symbols::label_for_user_id(symbol.user_id)
-                .expect("universal symbol should have a display label");
-            let resp = ui
-                .add_sized(
-                    KeycodePicker::picker_key_size(ui.ctx()),
-                    egui::Button::new(""),
-                )
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
-            KeycodePicker::paint_compact_picker_label(ui, &resp, &label);
-            if resp.clicked() {
-                picked = Some(crate::universal_symbols::binding(symbol.user_id));
-            }
-            resp.on_hover_text(crate::i18n::tr_text(
-                language,
-                &format!(
-                    "Universal Symbols: firmware types {} in English and Russian layouts",
-                    symbol.symbol
-                ),
-            ));
-        }
-    });
-
-    picked
+    match show_row_grid(ui, &universal_symbol_rows(language)) {
+        Some(PickerAction::Assign(binding)) => Some(binding),
+        _ => None,
+    }
 }
 
+/// Universal Russian letters as a section inside another chooser. Returns
+/// the picked binding.
 fn show_universal_russian_letter_section(
     ui: &mut egui::Ui,
     language: crate::i18n::Language,
 ) -> Option<crate::keyboard::KeyBinding> {
-    let mut picked = None;
     ui.add_space(crate::ui_style::modal_space_sm());
-    ui.label(
-        RichText::new(crate::i18n::tr_catalog(
-            language,
-            "key_picker_text.international",
-        ))
-        .size(11.0)
-        .color(Color32::from_gray(150)),
-    );
-    ui.add_space(4.0);
-    ui.horizontal_wrapped(|ui| {
-        for letter in crate::universal_symbols::RUSSIAN_LETTERS {
-            let binding = crate::universal_symbols::binding(letter.user_id);
-            let label = crate::universal_symbols::label_for_user_id(letter.user_id)
-                .expect("universal Russian letter should have a display label");
-            let resp = ui
-                .add_sized(
-                    KeycodePicker::picker_key_size(ui.ctx()),
-                    egui::Button::new(""),
-                )
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
-            KeycodePicker::paint_compact_picker_label(ui, &resp, &label);
-            if resp.clicked() {
-                picked = Some(binding);
-            }
-            resp.on_hover_text(crate::i18n::tr_text(
-                language,
-                &binding
-                    .rmk_action()
-                    .and_then(crate::universal_symbols::tooltip)
-                    .unwrap_or_default(),
-            ));
-        }
-    });
-    picked
+    let section = crate::i18n::tr_catalog(language, "key_picker_text.international");
+    show_section_heading(ui, section);
+    let rows = universal_russian_letter_rows(language, KeycodeTab::Special, section);
+    match show_row_grid(ui, &rows) {
+        Some(PickerAction::Assign(binding)) => Some(binding),
+        _ => None,
+    }
 }
 
 fn picker_tab_label(language: crate::i18n::Language, tab: KeycodeTab) -> &'static str {
@@ -941,6 +885,7 @@ impl Default for KeycodePicker {
             basic_layout: BasicPickerLayout::Qwerty,
             popup_view_mode: PickerViewMode::default(),
             search: PickerSearch::default(),
+            row_cache: RowCache::default(),
             result: None,
             custom_keycodes: vec![],
             supports_rgb: true,
@@ -1555,6 +1500,10 @@ impl KeycodePicker {
 
         let mut still_open = true;
         let picker_size = key_picker_main_size(ctx);
+        let slot_states = SlotDataStates {
+            macro_state: macro_data_state,
+            tap_dance_state: tap_dance_data_state,
+        };
         crate::ui_style::centered_modal_window(
             ctx,
             tr_picker(self.language, "key_picker.title"),
@@ -1678,7 +1627,7 @@ impl KeycodePicker {
                                         ui.allocate_ui_with_layout(
                                             Vec2::new(centered_width, 0.0),
                                             egui::Layout::top_down(egui::Align::Min),
-                                            |ui| self.show_vial_search_results(ui),
+                                            |ui| self.show_vial_search_results(ui, slot_states),
                                         );
                                     });
                                 } else if self.selected_tab == KeycodeTab::Basic {
@@ -2233,19 +2182,12 @@ impl KeycodePicker {
         }
         match self.selected_tab {
             KeycodeTab::Basic => self.show_vial_basic(ui),
-            KeycodeTab::Symbols => self.show_vial_symbols(ui),
-            KeycodeTab::UniversalSymbols => self.show_vial_universal_symbols(ui),
-            KeycodeTab::Layers => self.show_vial_layers(ui),
-            KeycodeTab::Modifiers => self.show_vial_modifiers(ui),
-            KeycodeTab::Rgb => self.show_vial_rgb(ui),
             KeycodeTab::Macro => self.show_vial_macros(ui),
             KeycodeTab::TapDance => self.show_vial_tap_dance(ui),
             KeycodeTab::Special => {
                 self.show_vial_special(ui, macro_data_state, tap_dance_data_state)
             }
-            KeycodeTab::Bluetooth => self.show_vial_bluetooth(ui),
-            KeycodeTab::Custom => self.show_vial_custom(ui),
-            _ => self.show_vial_generic(ui),
+            tab => self.show_tab_rows(ui, tab),
         }
     }
 }

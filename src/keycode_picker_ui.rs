@@ -384,6 +384,31 @@ pub(super) fn picker_tab_button(
     resp
 }
 
+/// Keycap of a picker row: the frame egui buttons get under
+/// `apply_picker_button_visuals`, with the two-line caption painted on top.
+pub(super) fn picker_keycap_row_button(
+    ui: &mut egui::Ui,
+    size: Vec2,
+    row: &PickerRow,
+) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact(&resp);
+        ui.painter().rect(
+            rect.expand(visuals.expansion),
+            visuals.corner_radius,
+            visuals.weak_bg_fill,
+            visuals.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
+        KeycodePicker::paint_compact_picker_label(ui, &resp, &row.label);
+    }
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp
+}
+
 pub(super) fn picker_slot_button(
     ui: &mut egui::Ui,
     id_text: &str,
