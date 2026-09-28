@@ -346,9 +346,9 @@ impl KeycodePicker {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 5.0;
                 ui.label(
-                    RichText::new(tab.glyph())
+                    RichText::new(tab.style().glyph)
                         .size(12.0)
-                        .color(picker_tab_tint(tab, dark)),
+                        .color(tab.style().tint(dark)),
                 );
                 let mut heading = picker_tab_label(self.language, tab).to_string();
                 if !section.is_empty() {

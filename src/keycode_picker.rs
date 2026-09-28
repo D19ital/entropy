@@ -14,6 +14,9 @@ pub use keycode_picker_keyboard::egui_key_to_qmk;
 #[path = "keycode_picker_model.rs"]
 mod keycode_picker_model;
 pub use keycode_picker_model::{BasicPickerLayout, KeycodeTab, PickerViewMode};
+#[path = "keycode_picker_catalog.rs"]
+mod keycode_picker_catalog;
+use keycode_picker_catalog::*;
 #[path = "keycode_picker_search.rs"]
 mod keycode_picker_search;
 use keycode_picker_search::*;
@@ -1628,8 +1631,7 @@ impl KeycodePicker {
                 for tab in &visible_tabs {
                     let active = self.selected_tab == *tab;
                     let tab_label = picker_tab_label(self.language, *tab);
-                    let tint = picker_tab_tint(*tab, ui.visuals().dark_mode);
-                    if picker_tab_button(ui, tab.glyph(), tab_label, tint, active).clicked() {
+                    if picker_tab_button(ui, tab.style(), tab_label, active).clicked() {
                         if self.selected_tab != *tab {
                             if *tab == KeycodeTab::Macro {
                                 self.macro_inline_selected = None;

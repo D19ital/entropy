@@ -190,7 +190,7 @@ impl BasicPickerLayout {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeycodeTab {
     Basic,
     Symbols,
@@ -207,6 +207,23 @@ pub enum KeycodeTab {
 }
 
 impl KeycodeTab {
+    /// Every tab, including the ones the Vial picker reaches only through
+    /// redirects or editors (Layers, Media, Macro, Tap Dance).
+    pub const ALL: [KeycodeTab; 12] = [
+        KeycodeTab::Basic,
+        KeycodeTab::Symbols,
+        KeycodeTab::UniversalSymbols,
+        KeycodeTab::Modifiers,
+        KeycodeTab::Layers,
+        KeycodeTab::Media,
+        KeycodeTab::Special,
+        KeycodeTab::Rgb,
+        KeycodeTab::Macro,
+        KeycodeTab::TapDance,
+        KeycodeTab::Bluetooth,
+        KeycodeTab::Custom,
+    ];
+
     pub const VIAL_TABS: &'static [KeycodeTab] = &[
         KeycodeTab::Basic,
         KeycodeTab::Symbols,
@@ -217,26 +234,6 @@ impl KeycodeTab {
         KeycodeTab::Bluetooth,
         KeycodeTab::Custom,
     ];
-
-    // Icon glyphs must exist in the embedded fonts (Roboto, DejaVu,
-    // Noto Sans Symbols 2, Noto Emoji). All of them render monochrome
-    // there, so the glyph takes whatever text color the tab uses.
-    pub(super) fn glyph(self) -> &'static str {
-        match self {
-            KeycodeTab::Basic => "⌨",
-            KeycodeTab::Symbols => "@",
-            KeycodeTab::UniversalSymbols => "🌐",
-            KeycodeTab::Modifiers => "⇧",
-            KeycodeTab::Layers => "☰",
-            KeycodeTab::Media => "🎵",
-            KeycodeTab::Special => "✦",
-            KeycodeTab::Rgb => "💡",
-            KeycodeTab::Macro => "⏺",
-            KeycodeTab::TapDance => "👆",
-            KeycodeTab::Bluetooth => "📶",
-            KeycodeTab::Custom => "🧩",
-        }
-    }
 
     pub(super) fn i18n_key(self) -> &'static str {
         match self {
@@ -371,29 +368,6 @@ mod tests {
             KeycodeTab::preferred_for_vial_keycode(0x7E00, true),
             KeycodeTab::Custom
         );
-    }
-
-    #[test]
-    fn every_tab_has_a_unique_glyph() {
-        let all = [
-            KeycodeTab::Basic,
-            KeycodeTab::Symbols,
-            KeycodeTab::UniversalSymbols,
-            KeycodeTab::Modifiers,
-            KeycodeTab::Layers,
-            KeycodeTab::Media,
-            KeycodeTab::Special,
-            KeycodeTab::Rgb,
-            KeycodeTab::Macro,
-            KeycodeTab::TapDance,
-            KeycodeTab::Bluetooth,
-            KeycodeTab::Custom,
-        ];
-        let mut seen = std::collections::HashSet::new();
-        for tab in all {
-            assert!(!tab.glyph().is_empty(), "tab {tab:?} has no glyph");
-            assert!(seen.insert(tab.glyph()), "duplicate glyph for {tab:?}");
-        }
     }
 
     #[test]
