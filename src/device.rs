@@ -330,13 +330,14 @@ impl Device {
     }
 
     pub fn display_name_with_transport(&self, display_name: &str) -> String {
+        // Keep the firmware-reported model name for storage and device identity,
+        // but expose the short product name requested by the desktop UI.
+        if self.is_m4cr0pad_v3() {
+            return "Macropad".to_owned();
+        }
         // Linux can occasionally expose a truncated USB product string. The
         // assigned VID/PID is the stable identity for M4CR0Pad v3.
-        let display_name = if self.is_m4cr0pad_v3() {
-            "M4CR0Pad v3"
-        } else {
-            display_name.trim()
-        };
+        let display_name = display_name.trim();
         if self.is_bluetooth_transport() {
             format!("{display_name} (Bluetooth)")
         } else if self.is_k04_qube() {
@@ -825,17 +826,14 @@ mod tests {
     }
 
     #[test]
-    fn m4cr0pad_v3_uses_canonical_name_when_usb_product_string_is_corrupt() {
+    fn m4cr0pad_v3_uses_short_product_name_when_usb_product_string_is_corrupt() {
         let mut device = test_device("Usb", "/dev/hidraw4");
         device.name = "Ль".to_owned();
         device.vendor_id = ERGOHAVEN_VENDOR_ID;
         device.product_id = M4CR0PAD_V3_PRODUCT_ID;
 
         assert!(device.is_m4cr0pad_v3());
-        assert_eq!(
-            device.display_name_with_transport(&device.name),
-            "M4CR0Pad v3 (USB)"
-        );
+        assert_eq!(device.display_name_with_transport(&device.name), "Macropad");
     }
 
     #[cfg(target_os = "linux")]
@@ -853,10 +851,7 @@ mod tests {
         assert_eq!(device.vendor_id, ERGOHAVEN_VENDOR_ID);
         assert_eq!(device.product_id, M4CR0PAD_V3_PRODUCT_ID);
         assert_eq!(device.name, "M4CR0Pad v3");
-        assert_eq!(
-            device.display_name_with_transport(&device.name),
-            "M4CR0Pad v3 (USB)"
-        );
+        assert_eq!(device.display_name_with_transport(&device.name), "Macropad");
     }
 
     #[test]

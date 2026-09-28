@@ -419,17 +419,20 @@ fn linux_foreground_backend_for(
         if sway {
             return LinuxForegroundBackend::Sway;
         }
-        if desktop
-            .split(':')
-            .any(|name| name.eq_ignore_ascii_case("gnome") || name.eq_ignore_ascii_case("ubuntu"))
-        {
-            return LinuxForegroundBackend::GnomeWayland;
-        }
+        // KDE must win over stale/secondary GNOME markers. Some Plasma
+        // sessions inherit a colon-separated desktop value from the login
+        // manager; showing the GNOME installer there cannot help KWin.
         if desktop
             .split(':')
             .any(|name| name.eq_ignore_ascii_case("kde"))
         {
             return LinuxForegroundBackend::KdeWayland;
+        }
+        if desktop
+            .split(':')
+            .any(|name| name.eq_ignore_ascii_case("gnome") || name.eq_ignore_ascii_case("ubuntu"))
+        {
+            return LinuxForegroundBackend::GnomeWayland;
         }
         return LinuxForegroundBackend::UnsupportedWayland;
     }
@@ -734,6 +737,11 @@ fn install_gnome_shell_integration_detailed() -> Result<GnomeIntegrationInstallR
     let directory = data_home
         .join("gnome-shell/extensions")
         .join(GNOME_EXTENSION_UUID);
+    // Updating an enabled extension in place leaves the previous JavaScript
+    // object alive. Disable it first so re-enabling can load the new bridge.
+    let _ = Command::new("gnome-extensions")
+        .args(["disable", GNOME_EXTENSION_UUID])
+        .output();
     std::fs::create_dir_all(&directory)
         .map_err(|error| format!("Cannot create GNOME integration directory: {error}"))?;
     let extension = if major >= 45 {
@@ -743,17 +751,15 @@ fn install_gnome_shell_integration_detailed() -> Result<GnomeIntegrationInstallR
     };
     std::fs::write(directory.join("extension.js"), extension)
         .map_err(|error| format!("Cannot install GNOME integration: {error}"))?;
-    let metadata = serde_json::json!({
-        "uuid": GNOME_EXTENSION_UUID,
-        "name": "Entropy application focus",
-        "description": "Reports the focused GNOME window to Entropy without accessibility access",
-        "version": 2,
-        "shell-version": [major.to_string()]
-    });
+    let metadata = gnome_extension_metadata(major);
     let metadata = serde_json::to_vec_pretty(&metadata)
         .map_err(|error| format!("Cannot build GNOME integration metadata: {error}"))?;
     std::fs::write(directory.join("metadata.json"), metadata)
         .map_err(|error| format!("Cannot install GNOME integration metadata: {error}"))?;
+
+    // Validate before enabling. The old installer wrote package version 2 but
+    // immediately required protocol 3, producing the reported false failure.
+    verify_gnome_integration_files(&directory)?;
 
     let enabled_by_command = Command::new("gnome-extensions")
         .args(["enable", GNOME_EXTENSION_UUID])
@@ -763,8 +769,6 @@ fn install_gnome_shell_integration_detailed() -> Result<GnomeIntegrationInstallR
     if !enabled_by_command {
         enable_gnome_extension_after_login()?;
     }
-
-    verify_gnome_integration_files(&directory)?;
     let enabled = gnome_extension_is_enabled()?;
     if !enabled {
         return Err(
@@ -784,6 +788,17 @@ fn install_gnome_shell_integration_detailed() -> Result<GnomeIntegrationInstallR
         enabled,
         active,
         restart_required,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn gnome_extension_metadata(major: u32) -> serde_json::Value {
+    serde_json::json!({
+        "uuid": GNOME_EXTENSION_UUID,
+        "name": "Entropy application focus",
+        "description": "Reports the focused GNOME window to Entropy without accessibility access",
+        "version": GNOME_EXTENSION_PROTOCOL_VERSION,
+        "shell-version": [major.to_string()]
     })
 }
 
@@ -2244,6 +2259,29 @@ mod tests {
             true,
             Some("wayland")
         ));
+        assert!(!linux_gnome_wayland_session_for(
+            "KDE:GNOME",
+            true,
+            Some("wayland")
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn bundled_gnome_metadata_matches_the_bridge_protocol() {
+        let metadata = gnome_extension_metadata(46);
+        assert_eq!(
+            metadata.get("version").and_then(serde_json::Value::as_u64),
+            Some(u64::from(GNOME_EXTENSION_PROTOCOL_VERSION))
+        );
+        assert_eq!(
+            metadata
+                .get("shell-version")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|versions| versions.first())
+                .and_then(serde_json::Value::as_str),
+            Some("46")
+        );
     }
 
     #[test]

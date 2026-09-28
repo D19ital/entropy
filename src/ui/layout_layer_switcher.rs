@@ -1,4 +1,3 @@
-use super::application_layout_runtime::app_layout_text;
 use super::*;
 
 pub(super) const MAIN_MENU_BATTERY_RESERVED_H: f32 = 34.0;
@@ -50,8 +49,26 @@ fn layer_name_edit_is_available(hid_busy: bool, background_layers_pending: bool)
     !hid_busy && !background_layers_pending
 }
 
+fn application_layout_after_step(current: usize, count: usize, step: i32) -> usize {
+    if count == 0 {
+        return 0;
+    }
+    if step < 0 {
+        current.saturating_sub(1)
+    } else if step > 0 {
+        (current + 1).min(count - 1)
+    } else {
+        current.min(count - 1)
+    }
+}
+
 impl EntropyApp {
-    fn draw_application_layout_switcher(&mut self, ui: &mut egui::Ui, center_x: f32, bar_y: f32) {
+    fn draw_application_layout_switcher(
+        &mut self,
+        ui: &mut egui::Ui,
+        center_x: f32,
+        center_y: f32,
+    ) {
         let options = self.application_layout_editor_options();
         if options.is_empty() {
             return;
@@ -67,46 +84,97 @@ impl EntropyApp {
             .position(|(id, _)| id == &current_id)
             .unwrap_or(0);
         let current_name = options[current_index].1.clone();
-        let selector_width = 300.0;
-        let selector_height = 38.0;
+        let visible_name: String = current_name.chars().take(14).collect();
+        let selector_width = 200.0;
+        let selector_height = 34.0;
         let selector_rect = egui::Rect::from_center_size(
-            egui::pos2(center_x, bar_y + 30.0),
-            egui::vec2(selector_width, selector_height),
+            egui::pos2(center_x, center_y),
+            egui::vec2(140.0, selector_height),
         );
+        let left_center = egui::pos2(center_x - 86.0, center_y - 1.0);
+        let right_center = egui::pos2(center_x + 86.0, center_y - 1.0);
         let dropdown_id = ui.make_persistent_id("layout_page_application_selector");
         let response = ui.allocate_rect(selector_rect, Sense::click());
-        let fill = if self.dark_mode {
-            Color32::from_rgb(48, 48, 51)
-        } else {
-            Color32::from_rgb(245, 245, 247)
-        };
-        ui.painter().rect(
-            selector_rect,
-            8.0,
-            fill,
-            egui::Stroke::new(1.0_f32, crate::ui_style::border_color(self.dark_mode)),
-            egui::StrokeKind::Inside,
-        );
-        ui.painter().text(
-            egui::pos2(selector_rect.left() + 14.0, selector_rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            current_name,
-            FontId::proportional(15.0),
-            ui.visuals().text_color(),
-        );
-        ui.painter().text(
-            egui::pos2(selector_rect.right() - 14.0, selector_rect.center().y),
-            egui::Align2::RIGHT_CENTER,
-            "⌄",
-            FontId::proportional(18.0),
-            app_muted_text(self.dark_mode),
-        );
+        let left_rect = egui::Rect::from_center_size(left_center, egui::vec2(28.0, 34.0));
+        let right_rect = egui::Rect::from_center_size(right_center, egui::vec2(28.0, 34.0));
+        let left_response = ui.allocate_rect(left_rect, Sense::click());
+        let right_response = ui.allocate_rect(right_rect, Sense::click());
+
+        if left_response.clicked() {
+            let index = application_layout_after_step(current_index, options.len(), -1);
+            if index != current_index {
+                self.activate_application_layout(&options[index].0);
+            }
+        }
+        if right_response.clicked() {
+            let index = application_layout_after_step(current_index, options.len(), 1);
+            if index != current_index {
+                self.activate_application_layout(&options[index].0);
+            }
+        }
         if response.clicked() {
             egui::Popup::toggle_id(ui.ctx(), dropdown_id);
         }
-        if response.hovered() {
+        if response.hovered() || left_response.hovered() || right_response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
+
+        let text_color = if self.dark_mode {
+            Color32::from_gray(245)
+        } else {
+            Color32::from_gray(60)
+        };
+        let disabled = if self.dark_mode {
+            Color32::from_gray(60)
+        } else {
+            Color32::from_gray(200)
+        };
+        let arrow_color = |hovered| {
+            if hovered {
+                app_accent()
+            } else if self.dark_mode {
+                Color32::from_gray(140)
+            } else {
+                Color32::from_gray(120)
+            }
+        };
+        let name_size = if visible_name.chars().count() > 11 {
+            18.0
+        } else if visible_name.chars().count() > 8 {
+            21.0
+        } else {
+            26.0
+        };
+        ui.painter().text(
+            egui::pos2(center_x, center_y),
+            egui::Align2::CENTER_CENTER,
+            visible_name,
+            FontId::proportional(name_size),
+            text_color,
+        );
+        ui.painter().text(
+            left_center,
+            egui::Align2::CENTER_CENTER,
+            "‹",
+            FontId::proportional(34.7),
+            if current_index == 0 {
+                disabled
+            } else {
+                arrow_color(left_response.hovered())
+            },
+        );
+        ui.painter().text(
+            right_center,
+            egui::Align2::CENTER_CENTER,
+            "›",
+            FontId::proportional(34.7),
+            if current_index + 1 >= options.len() {
+                disabled
+            } else {
+                arrow_color(right_response.hovered())
+            },
+        );
+
         crate::ui_style::popup_below_widget(
             ui,
             dropdown_id,
@@ -122,13 +190,6 @@ impl EntropyApp {
                     }
                 }
             },
-        );
-        ui.painter().text(
-            egui::pos2(center_x, bar_y + 3.0),
-            egui::Align2::CENTER_CENTER,
-            app_layout_text(self.app_settings.language, "РАСКЛАДКА", "LAYOUT"),
-            FontId::proportional(10.5),
-            app_muted_text(self.dark_mode),
         );
     }
 
@@ -205,14 +266,6 @@ impl EntropyApp {
         main_tabs_h: f32,
         layer_bar_h: f32,
     ) {
-        let application_selector_offset = if self.application_layout_editor_active {
-            let center_x = ui.max_rect().center().x;
-            let bar_y = top_base_y + main_tabs_h + 18.0;
-            self.draw_application_layout_switcher(ui, center_x, bar_y);
-            58.0
-        } else {
-            0.0
-        };
         // ── Layer switcher ─────────────────────────────────────────────────
         {
             let layer_count = if self.application_layout_editor_active {
@@ -240,7 +293,7 @@ impl EntropyApp {
             };
             let name = display_name;
             let center_x = ui.max_rect().center().x;
-            let bar_y = top_base_y + main_tabs_h + 24.0 + application_selector_offset;
+            let bar_y = top_base_y + main_tabs_h + 24.0;
             let mid_y = bar_y + layer_bar_h / 2.0;
             // Layer name / edit field
             let name_rect = egui::Rect::from_min_size(
@@ -479,6 +532,9 @@ impl EntropyApp {
             }
 
             self.draw_main_menu_battery_status(ui, center_x, mid_y);
+            if self.application_layout_editor_active {
+                self.draw_application_layout_switcher(ui, center_x, mid_y + 50.0);
+            }
         }
     }
 }
@@ -488,8 +544,8 @@ mod tests {
     use crate::app::DeviceAboutInfo;
 
     use super::{
-        layer_after_wheel, layer_name_edit_is_available, main_menu_battery_status,
-        main_menu_reserves_battery_status_space, MainMenuBatteryStatus,
+        application_layout_after_step, layer_after_wheel, layer_name_edit_is_available,
+        main_menu_battery_status, main_menu_reserves_battery_status_space, MainMenuBatteryStatus,
     };
 
     #[test]
@@ -557,6 +613,15 @@ mod tests {
         assert_eq!(layer_after_wheel(14, 16, -120.0), 15);
         assert_eq!(layer_after_wheel(15, 16, -120.0), 15);
         assert_eq!(layer_after_wheel(0, 16, 120.0), 0);
+    }
+
+    #[test]
+    fn application_layout_arrows_do_not_wrap() {
+        assert_eq!(application_layout_after_step(0, 3, -1), 0);
+        assert_eq!(application_layout_after_step(0, 3, 1), 1);
+        assert_eq!(application_layout_after_step(2, 3, 1), 2);
+        assert_eq!(application_layout_after_step(2, 3, -1), 1);
+        assert_eq!(application_layout_after_step(0, 0, 1), 0);
     }
 
     #[test]

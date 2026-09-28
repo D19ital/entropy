@@ -8,6 +8,44 @@ struct ApplicationPickerGeometry {
     list_height: f32,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ControlPairGeometry {
+    leading: egui::Rect,
+    trailing: egui::Rect,
+}
+
+const APPLICATION_LAYOUT_CONTROL_GAP: f32 = 8.0;
+
+fn split_control_width(total_width: f32, trailing_width: f32, gap: f32) -> f32 {
+    (total_width - trailing_width - gap).max(0.0)
+}
+
+fn paired_button_width(total_width: f32, gap: f32) -> f32 {
+    ((total_width - gap) / 2.0).max(0.0)
+}
+
+fn control_pair_geometry(
+    control_rect: egui::Rect,
+    trailing_width: f32,
+    gap: f32,
+    height: f32,
+) -> ControlPairGeometry {
+    let height = height.min(control_rect.height()).max(0.0);
+    let top = control_rect.center().y - height / 2.0;
+    let trailing_width = trailing_width.min(control_rect.width()).max(0.0);
+    let trailing = egui::Rect::from_min_size(
+        egui::pos2(control_rect.right() - trailing_width, top),
+        egui::vec2(trailing_width, height),
+    );
+    let leading_right = (trailing.left() - gap).max(control_rect.left());
+    let leading = egui::Rect::from_min_max(
+        egui::pos2(control_rect.left(), top),
+        egui::pos2(leading_right, top + height),
+    );
+
+    ControlPairGeometry { leading, trailing }
+}
+
 fn application_picker_geometry(viewport: egui::Vec2, scale: f32) -> ApplicationPickerGeometry {
     let horizontal_margin = 24.0 * scale;
     let vertical_margin = 24.0 * scale;
@@ -113,8 +151,8 @@ impl EntropyApp {
                     ui.add_space(metrics.value(150.0));
                     ui.label(app_layout_text(
                         language,
-                        "Подключите M4CR0Pad v3, чтобы настроить раскладки приложений.",
-                        "Connect M4CR0Pad v3 to configure application layouts.",
+                        "Подключите Macropad, чтобы настроить раскладки приложений.",
+                        "Connect Macropad to configure application layouts.",
                     ));
                 });
                 return;
@@ -306,25 +344,32 @@ impl EntropyApp {
                 true,
                 control_width,
                 |ui| {
-                    let gap = metrics.value(8.0);
-                    let button_width = (control_width - gap) / 2.0;
-                    if crate::ui_style::modern_button(
-                        ui,
-                        app_layout_text(language, "Добавить…", "Add…"),
-                        egui::vec2(button_width, control_height),
-                        true,
-                    )
+                    let gap = metrics.value(APPLICATION_LAYOUT_CONTROL_GAP);
+                    let button_width = paired_button_width(control_width, gap);
+                    let pair =
+                        control_pair_geometry(ui.max_rect(), button_width, gap, control_height);
+                    if crate::ui_style::allocate_ui_at_rect(ui, pair.leading, |ui| {
+                        crate::ui_style::modern_button(
+                            ui,
+                            app_layout_text(language, "Добавить…", "Add…"),
+                            pair.leading.size(),
+                            true,
+                        )
+                    })
+                    .inner
                     .clicked()
                     {
                         self.open_application_picker(false);
                     }
-                    ui.add_space(gap);
-                    if crate::ui_style::modern_button(
-                        ui,
-                        app_layout_text(language, "Удалить", "Delete"),
-                        egui::vec2(button_width, control_height),
-                        !is_default,
-                    )
+                    if crate::ui_style::allocate_ui_at_rect(ui, pair.trailing, |ui| {
+                        crate::ui_style::modern_button(
+                            ui,
+                            app_layout_text(language, "Удалить", "Delete"),
+                            pair.trailing.size(),
+                            !is_default,
+                        )
+                    })
+                    .inner
                     .clicked()
                     {
                         if let Some(settings) =
@@ -390,26 +435,31 @@ impl EntropyApp {
                 !is_default,
                 control_width,
                 |ui| {
-                    let gap = metrics.value(8.0);
+                    let gap = metrics.value(APPLICATION_LAYOUT_CONTROL_GAP);
                     let choose_width = metrics.value(82.0);
-                    let field_width = control_width - choose_width - gap;
-                    crate::ui_style::modern_text_field_interactive(
-                        ui,
-                        ui.make_persistent_id("application_layout_executable"),
-                        &mut application_display,
-                        field_width,
-                        app_layout_text(language, "Исполняемый файл", "Executable"),
-                        120,
-                        egui::Align::Min,
-                        false,
-                    );
-                    ui.add_space(gap);
-                    if crate::ui_style::modern_button(
-                        ui,
-                        app_layout_text(language, "Изменить", "Edit"),
-                        metrics.size(82.0, 32.0),
-                        !is_default,
-                    )
+                    let pair =
+                        control_pair_geometry(ui.max_rect(), choose_width, gap, control_height);
+                    crate::ui_style::allocate_ui_at_rect(ui, pair.leading, |ui| {
+                        crate::ui_style::modern_text_field_interactive(
+                            ui,
+                            ui.make_persistent_id("application_layout_executable"),
+                            &mut application_display,
+                            pair.leading.width(),
+                            app_layout_text(language, "Исполняемый файл", "Executable"),
+                            120,
+                            egui::Align::Min,
+                            false,
+                        )
+                    });
+                    if crate::ui_style::allocate_ui_at_rect(ui, pair.trailing, |ui| {
+                        crate::ui_style::modern_button(
+                            ui,
+                            app_layout_text(language, "Изменить", "Edit"),
+                            pair.trailing.size(),
+                            !is_default,
+                        )
+                    })
+                    .inner
                     .clicked()
                     {
                         self.open_application_picker(true);
@@ -909,32 +959,42 @@ impl EntropyApp {
                         egui::Align::Min,
                     );
                     ui.add_space(metrics.value(12.0));
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 0.0;
-                        let refresh_width = metrics.value(104.0);
-                        let gap = metrics.value(10.0);
+                    let control_height = metrics.settings_control_height();
+                    let (row_rect, _) = ui.allocate_exact_size(
+                        egui::vec2(content_width, control_height),
+                        egui::Sense::hover(),
+                    );
+                    let pair = control_pair_geometry(
+                        row_rect,
+                        metrics.value(104.0),
+                        metrics.value(APPLICATION_LAYOUT_CONTROL_GAP),
+                        control_height,
+                    );
+                    crate::ui_style::allocate_ui_at_rect(ui, pair.leading, |ui| {
                         crate::ui_style::modern_text_field_sized(
                             ui,
                             ui.make_persistent_id("application_picker_search_v2"),
                             &mut self.application_picker_search,
-                            content_width - refresh_width - gap,
-                            metrics.settings_control_height(),
+                            pair.leading.width(),
+                            pair.leading.height(),
                             app_layout_text(language, "Поиск приложения", "Search applications"),
                             120,
                             egui::Align::Min,
-                        );
-                        ui.add_space(gap);
-                        if crate::ui_style::modern_button(
+                        )
+                    });
+                    if crate::ui_style::allocate_ui_at_rect(ui, pair.trailing, |ui| {
+                        crate::ui_style::modern_button(
                             ui,
                             app_layout_text(language, "Обновить", "Refresh"),
-                            metrics.size(104.0, 32.0),
+                            pair.trailing.size(),
                             true,
                         )
-                        .clicked()
-                        {
-                            crate::app_discovery::refresh_application_discovery();
-                        }
-                    });
+                    })
+                    .inner
+                    .clicked()
+                    {
+                        crate::app_discovery::refresh_application_discovery();
+                    }
                     ui.add_space(metrics.value(10.0));
 
                     let filtered = applications
@@ -1037,16 +1097,24 @@ impl EntropyApp {
                         });
 
                     ui.add_space(metrics.value(10.0));
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 0.0;
-                        let use_width = metrics.value(104.0);
-                        let gap = metrics.value(10.0);
+                    let control_height = metrics.settings_control_height();
+                    let (row_rect, _) = ui.allocate_exact_size(
+                        egui::vec2(content_width, control_height),
+                        egui::Sense::hover(),
+                    );
+                    let pair = control_pair_geometry(
+                        row_rect,
+                        metrics.value(104.0),
+                        metrics.value(APPLICATION_LAYOUT_CONTROL_GAP),
+                        control_height,
+                    );
+                    crate::ui_style::allocate_ui_at_rect(ui, pair.leading, |ui| {
                         crate::ui_style::modern_text_field_sized(
                             ui,
                             ui.make_persistent_id("application_picker_manual_v2"),
                             &mut self.application_manual_executable,
-                            content_width - use_width - gap,
-                            metrics.settings_control_height(),
+                            pair.leading.width(),
+                            pair.leading.height(),
                             app_layout_text(
                                 language,
                                 "Исполняемый файл: figma, code, blender",
@@ -1054,28 +1122,30 @@ impl EntropyApp {
                             ),
                             120,
                             egui::Align::Min,
-                        );
-                        ui.add_space(gap);
-                        if crate::ui_style::modern_button(
+                        )
+                    });
+                    if crate::ui_style::allocate_ui_at_rect(ui, pair.trailing, |ui| {
+                        crate::ui_style::modern_button(
                             ui,
                             app_layout_text(language, "Использовать", "Use"),
-                            metrics.size(104.0, 32.0),
+                            pair.trailing.size(),
                             !self.application_manual_executable.trim().is_empty(),
                         )
-                        .clicked()
-                        {
-                            let executable = self.application_manual_executable.trim().to_owned();
-                            self.application_picker_selected =
-                                Some(crate::application_layouts::DetectedApplication {
-                                    display_name: executable.clone(),
-                                    identities: vec![executable.clone()],
-                                    executable: executable.clone(),
-                                    window_title: String::new(),
-                                });
-                            self.application_picker_layout_name = executable;
-                            ui.ctx().request_repaint();
-                        }
-                    });
+                    })
+                    .inner
+                    .clicked()
+                    {
+                        let executable = self.application_manual_executable.trim().to_owned();
+                        self.application_picker_selected =
+                            Some(crate::application_layouts::DetectedApplication {
+                                display_name: executable.clone(),
+                                identities: vec![executable.clone()],
+                                executable: executable.clone(),
+                                window_title: String::new(),
+                            });
+                        self.application_picker_layout_name = executable;
+                        ui.ctx().request_repaint();
+                    }
 
                     ui.add_space(metrics.value(12.0));
                     let (duplicate_name, duplicate_rule) = self.application_picker_validation();
@@ -1096,7 +1166,7 @@ impl EntropyApp {
                             can_confirm,
                         )
                         .clicked();
-                        ui.add_space(metrics.value(8.0));
+                        ui.add_space(metrics.value(APPLICATION_LAYOUT_CONTROL_GAP));
                         cancel = crate::ui_style::modern_button(
                             ui,
                             app_layout_text(language, "Отмена", "Cancel"),
@@ -1192,33 +1262,42 @@ impl EntropyApp {
                         .color(app_muted_text(ui.visuals().dark_mode)),
                     );
                     ui.add_space(metrics.value(12.0));
-                    ui.horizontal(|ui| {
-                        let refresh_width = metrics.value(104.0);
-                        let gap = metrics.value(10.0);
-                        let search_width = content_width - refresh_width - gap;
-                        let search_id = ui.make_persistent_id("application_picker_search");
+                    let control_height = metrics.settings_control_height();
+                    let (row_rect, _) = ui.allocate_exact_size(
+                        egui::vec2(content_width, control_height),
+                        egui::Sense::hover(),
+                    );
+                    let pair = control_pair_geometry(
+                        row_rect,
+                        metrics.value(104.0),
+                        metrics.value(APPLICATION_LAYOUT_CONTROL_GAP),
+                        control_height,
+                    );
+                    crate::ui_style::allocate_ui_at_rect(ui, pair.leading, |ui| {
                         crate::ui_style::modern_text_field_sized(
                             ui,
-                            search_id,
+                            ui.make_persistent_id("application_picker_search"),
                             &mut self.application_picker_search,
-                            search_width,
-                            metrics.settings_control_height(),
+                            pair.leading.width(),
+                            pair.leading.height(),
                             app_layout_text(language, "Поиск приложения", "Search applications"),
                             120,
                             egui::Align::Min,
-                        );
-                        ui.add_space(gap);
-                        if crate::ui_style::modern_button(
+                        )
+                    });
+                    if crate::ui_style::allocate_ui_at_rect(ui, pair.trailing, |ui| {
+                        crate::ui_style::modern_button(
                             ui,
                             app_layout_text(language, "Обновить", "Refresh"),
-                            metrics.size(104.0, 32.0),
+                            pair.trailing.size(),
                             true,
                         )
-                        .clicked()
-                        {
-                            crate::app_discovery::refresh_application_discovery();
-                        }
-                    });
+                    })
+                    .inner
+                    .clicked()
+                    {
+                        crate::app_discovery::refresh_application_discovery();
+                    }
                     ui.add_space(metrics.value(12.0));
 
                     let filtered = applications
@@ -1329,30 +1408,39 @@ impl EntropyApp {
                         .color(app_muted_text(ui.visuals().dark_mode)),
                     );
                     ui.add_space(metrics.value(8.0));
-                    ui.horizontal(|ui| {
-                        let use_width = metrics.value(104.0);
-                        let gap = metrics.value(10.0);
-                        let field_width = content_width - use_width - gap;
-                        let manual_id = ui.make_persistent_id("application_picker_manual");
+                    let control_height = metrics.settings_control_height();
+                    let (row_rect, _) = ui.allocate_exact_size(
+                        egui::vec2(content_width, control_height),
+                        egui::Sense::hover(),
+                    );
+                    let pair = control_pair_geometry(
+                        row_rect,
+                        metrics.value(104.0),
+                        metrics.value(APPLICATION_LAYOUT_CONTROL_GAP),
+                        control_height,
+                    );
+                    crate::ui_style::allocate_ui_at_rect(ui, pair.leading, |ui| {
                         crate::ui_style::modern_text_field_sized(
                             ui,
-                            manual_id,
+                            ui.make_persistent_id("application_picker_manual"),
                             &mut self.application_manual_executable,
-                            field_width,
-                            metrics.settings_control_height(),
+                            pair.leading.width(),
+                            pair.leading.height(),
                             "figma, code, blender",
                             120,
                             egui::Align::Min,
-                        );
-                        ui.add_space(gap);
-                        manual_add = crate::ui_style::modern_button(
+                        )
+                    });
+                    manual_add = crate::ui_style::allocate_ui_at_rect(ui, pair.trailing, |ui| {
+                        crate::ui_style::modern_button(
                             ui,
                             app_layout_text(language, "Использовать", "Use"),
-                            metrics.size(104.0, 32.0),
+                            pair.trailing.size(),
                             !self.application_manual_executable.trim().is_empty(),
                         )
-                        .clicked();
-                    });
+                    })
+                    .inner
+                    .clicked();
                 },
             );
         });
@@ -1403,6 +1491,82 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn application_form_columns_use_one_exact_gap() {
+        let total = 260.0;
+        let gap = APPLICATION_LAYOUT_CONTROL_GAP;
+        let trailing = 82.0;
+        let leading = split_control_width(total, trailing, gap);
+
+        assert_eq!(leading, 170.0);
+        assert_eq!(leading + gap + trailing, total);
+    }
+
+    #[test]
+    fn application_action_buttons_fit_the_control_column() {
+        let total = 260.0;
+        let gap = APPLICATION_LAYOUT_CONTROL_GAP;
+        let button = paired_button_width(total, gap);
+
+        assert_eq!(button, 126.0);
+        assert_eq!(button + gap + button, total);
+    }
+
+    #[test]
+    fn application_action_row_does_not_cross_its_control_boundary() {
+        let control = egui::Rect::from_min_size(egui::pos2(342.0, 10.0), egui::vec2(260.0, 54.0));
+        let gap = APPLICATION_LAYOUT_CONTROL_GAP;
+        let button = paired_button_width(control.width(), gap);
+        let pair = control_pair_geometry(control, button, gap, 32.0);
+
+        assert!((pair.trailing.left() - pair.leading.right() - gap).abs() <= 0.01);
+        assert!((pair.leading.left() - control.left()).abs() <= 0.01);
+        assert!((pair.trailing.right() - control.right()).abs() <= 0.01);
+    }
+
+    #[test]
+    fn action_and_application_rows_use_the_same_visual_gap_at_scaled_ui() {
+        let scale = 1.12;
+        let control = egui::Rect::from_min_size(
+            egui::pos2(342.0, 10.0),
+            egui::vec2(260.0 * scale, 54.0 * scale),
+        );
+        let gap = APPLICATION_LAYOUT_CONTROL_GAP * scale;
+        let action = control_pair_geometry(
+            control,
+            paired_button_width(control.width(), gap),
+            gap,
+            32.0 * scale,
+        );
+        let application = control_pair_geometry(control, 82.0 * scale, gap, 32.0 * scale);
+
+        let action_gap = action.trailing.left() - action.leading.right();
+        let application_gap = application.trailing.left() - application.leading.right();
+        assert!((action_gap - application_gap).abs() <= 0.01);
+        assert!((action_gap - gap).abs() <= 0.01);
+        assert!((action.trailing.right() - application.trailing.right()).abs() <= 0.01);
+    }
+
+    #[test]
+    fn picker_field_button_rows_use_exact_gap_and_right_edge_at_scaled_ui() {
+        let scale = 1.12;
+        let content = egui::Rect::from_min_size(
+            egui::pos2(20.0, 40.0),
+            egui::vec2(620.0 * scale, 32.0 * scale),
+        );
+        let gap = APPLICATION_LAYOUT_CONTROL_GAP * scale;
+        let trailing_width = 104.0 * scale;
+
+        let refresh = control_pair_geometry(content, trailing_width, gap, content.height());
+        let use_executable = control_pair_geometry(content, trailing_width, gap, content.height());
+
+        for pair in [refresh, use_executable] {
+            assert!((pair.trailing.left() - pair.leading.right() - gap).abs() <= 0.01);
+            assert!((pair.leading.left() - content.left()).abs() <= 0.01);
+            assert!((pair.trailing.right() - content.right()).abs() <= 0.01);
+        }
+    }
 
     #[test]
     fn application_picker_fits_reference_viewport_without_touching_edges() {
