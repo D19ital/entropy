@@ -218,6 +218,7 @@ impl KeycodePicker {
         let width = key.span as f32 * cell_w + key.span.saturating_sub(1) as f32 * gap;
         let rect = egui::Rect::from_min_size(egui::pos2(x, y), Vec2::new(width, cell_h));
         let resp = picker_keycap_button_in_rect(ui, rect, &cell.row.label, cell.enabled, false);
+        set_accessible_description(ui, &resp, &cell.row.tooltip);
         if resp.clicked() {
             self.perform_picker_action(cell.row.action);
         }

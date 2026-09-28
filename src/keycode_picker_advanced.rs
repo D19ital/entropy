@@ -12,6 +12,7 @@ impl KeycodePicker {
         let ready = data_state == DeferredPickerDataState::Ready;
         let response = picker_button(ui, label, Self::picker_key_size(ui.ctx()), ready, false)
             .on_hover_text(tooltip);
+        set_accessible_description(ui, &response, tooltip);
         if response.clicked() && ready {
             self.advanced_slot_picker = Some(kind);
         }

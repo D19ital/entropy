@@ -72,6 +72,11 @@ impl PickerRow {
         self
     }
 
+    /// Caption on one line: the accessible name of the keycap.
+    pub(super) fn accessible_name(&self) -> String {
+        self.label.replace('\n', " ")
+    }
+
     /// Case-insensitive substring match over caption, aliases, tooltip and
     /// section heading. `needle_lower` must already be normalized.
     pub(super) fn matches(&self, needle_lower: &str) -> bool {
@@ -516,6 +521,93 @@ mod tests {
         picker.perform_picker_action(PickerAction::Assign(KeyBinding::Vial(0x0004)));
         assert_eq!(picker.result, Some(KeyBinding::Vial(0x0004)));
         assert!(!picker.open);
+    }
+
+    /// Accessible name and description of a keycap: the caption users see
+    /// and the tooltip behind it. Together they tell apart same-caption keys
+    /// such as the three lighting "Toggle" rows.
+    fn accessible_pair(row: &PickerRow) -> (String, Option<String>) {
+        let description = (!row.tooltip.is_empty()).then(|| row.tooltip.clone());
+        (row.accessible_name(), description)
+    }
+
+    fn sorted<T: Ord>(mut items: Vec<T>) -> Vec<T> {
+        items.sort();
+        items
+    }
+
+    /// Renders every visible tab and checks the accessibility tree: the
+    /// keycaps on screen are exactly the tab's rows, and each of them has a
+    /// search entry with the same name and description.
+    #[test]
+    fn every_rendered_keycap_is_searchable_and_every_row_is_rendered() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        use std::collections::HashSet;
+
+        let configs: [fn() -> KeycodePicker; 2] = [KeycodePicker::default, full_picker];
+        for make_picker in configs {
+            for tab in make_picker().visible_vial_tabs() {
+                let mut picker = make_picker();
+                picker.open = true;
+                picker.selected_tab = tab;
+                picker.language = crate::i18n::Language::English;
+                let mut harness = egui_kittest::Harness::builder()
+                    .with_size(egui::vec2(1_400.0, 1_000.0))
+                    .build_state(
+                        |ctx, picker: &mut KeycodePicker| {
+                            picker.show(
+                                ctx,
+                                DeferredPickerDataState::Ready,
+                                DeferredPickerDataState::Ready,
+                            );
+                        },
+                        picker,
+                    );
+                harness.run();
+
+                // Tabs carry a selected state and the window chrome has its
+                // own buttons; everything else with a name is a keycap.
+                let rendered: Vec<(String, Option<String>)> = harness
+                    .get_all_by_role(Role::Button)
+                    .filter(|node| node.accesskit_node().toggled().is_none())
+                    .filter_map(|node| {
+                        let node = node.accesskit_node();
+                        node.label()
+                            .filter(|label| label != "Close window")
+                            .map(|label| (label, node.description()))
+                    })
+                    .collect();
+                assert!(!rendered.is_empty(), "{tab:?} rendered no keycaps");
+
+                let expected: Vec<(String, Option<String>)> = harness
+                    .state()
+                    .tab_rows(tab)
+                    .iter()
+                    .map(accessible_pair)
+                    .collect();
+                assert_eq!(
+                    sorted(rendered.clone()),
+                    sorted(expected),
+                    "{tab:?}: keycaps on screen differ from the tab's rows"
+                );
+
+                let searchable: HashSet<(String, Option<String>)> = harness
+                    .state_mut()
+                    .search_rows()
+                    .iter()
+                    .map(accessible_pair)
+                    .collect();
+                let unsearchable: Vec<_> = rendered
+                    .iter()
+                    .filter(|pair| !searchable.contains(*pair))
+                    .collect();
+                assert!(
+                    unsearchable.is_empty(),
+                    "{tab:?}: rendered keycaps without a search entry: {unsearchable:?}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -63,6 +63,7 @@ press_key_or_click_cancel = "Press a key on your keyboard, or click below (Esc t
 search_hint = "Search keys, or press a key on your keyboard"
 search_matches = "Found: {count}"
 search_empty = "Nothing found"
+search_clear = "Clear search"
 best_for_normal = "Best for normal keys, navigation, media and special actions"
 none_clear = "None (clear)"
 pick_layer_title = "Pick layer"

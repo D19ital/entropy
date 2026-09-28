@@ -291,6 +291,153 @@ mod tests {
         assert!(!harness.state().open, "picker must stay closed");
     }
 
+    fn english_picker() -> KeycodePicker {
+        KeycodePicker {
+            open: true,
+            language: crate::i18n::Language::English,
+            ..Default::default()
+        }
+    }
+
+    fn open_picker_harness(picker: KeycodePicker) -> egui_kittest::Harness<'static, KeycodePicker> {
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1_400.0, 1_000.0))
+            .build_state(
+                |ctx, picker: &mut KeycodePicker| {
+                    picker.show(
+                        ctx,
+                        DeferredPickerDataState::Ready,
+                        DeferredPickerDataState::Ready,
+                    );
+                },
+                picker,
+            );
+        harness.run();
+        harness
+    }
+
+    #[test]
+    fn tabs_expose_names_and_selected_state_to_assistive_tech() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{NodeT, Queryable};
+
+        let mut harness = open_picker_harness(english_picker());
+        let basic = harness.get_by_role_and_label(Role::Tab, "Basic");
+        assert_eq!(basic.accesskit_node().is_selected(), Some(true));
+        let special = harness.get_by_role_and_label(Role::Tab, "Special");
+        assert_eq!(special.accesskit_node().is_selected(), Some(false));
+
+        special.click();
+        harness.run();
+        assert_eq!(harness.state().selected_tab, KeycodeTab::Special);
+        let special = harness.get_by_role_and_label(Role::Tab, "Special");
+        assert_eq!(special.accesskit_node().is_selected(), Some(true));
+    }
+
+    #[test]
+    fn search_results_and_clear_control_are_accessible() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{NodeT, Queryable};
+
+        let mut picker = english_picker();
+        picker.search.query = "kc_volu".into();
+        let mut harness = open_picker_harness(picker);
+        let hit = harness.state().search.results()[0].clone();
+        let name = hit.accessible_name();
+        let node = harness.get_by_role_and_label(Role::Button, &name);
+        assert_eq!(
+            node.accesskit_node().description(),
+            Some(hit.tooltip.clone())
+        );
+
+        harness
+            .get_by_role_and_label(Role::Button, "Clear search")
+            .click();
+        harness.run();
+        assert!(harness.state().search.query.is_empty());
+        assert!(!harness.state().search.is_active());
+    }
+
+    #[test]
+    fn focused_tab_is_selected_with_enter_and_arrows_move_between_tabs() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+
+        let mut harness = open_picker_harness(english_picker());
+        harness.get_by_role_and_label(Role::Tab, "Basic").focus();
+        harness.run();
+        harness.key_press(egui::Key::ArrowRight);
+        harness.run();
+        assert!(
+            harness
+                .get_by_role_and_label(Role::Tab, "Symbols")
+                .is_focused(),
+            "Right arrow should move focus to the next tab"
+        );
+        assert_eq!(harness.state().selected_tab, KeycodeTab::Basic);
+
+        harness.key_press(egui::Key::Enter);
+        harness.run();
+        assert_eq!(harness.state().selected_tab, KeycodeTab::Symbols);
+        assert!(harness.state().open);
+    }
+
+    #[test]
+    fn focused_search_result_is_assigned_with_enter() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+
+        let mut picker = english_picker();
+        picker.search.query = "kc_volu".into();
+        let mut harness = open_picker_harness(picker);
+        let hit = harness.state().search.results()[0].clone();
+        let name = hit.accessible_name();
+        harness.get_by_role_and_label(Role::Button, &name).focus();
+        harness.run();
+        harness.key_press(egui::Key::Enter);
+        harness.run();
+        assert_eq!(
+            harness.state().result,
+            Some(crate::keyboard::KeyBinding::Vial(0x00A9))
+        );
+        assert!(!harness.state().open);
+    }
+
+    #[test]
+    fn clicking_a_tab_keeps_physical_key_capture_working() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+
+        let mut harness = open_picker_harness(english_picker());
+        harness.get_by_role_and_label(Role::Tab, "Special").click();
+        harness.run();
+        assert_eq!(harness.state().selected_tab, KeycodeTab::Special);
+
+        harness.key_press(egui::Key::A);
+        harness.run();
+        assert_eq!(
+            harness.state().result,
+            Some(crate::keyboard::KeyBinding::Vial(0x0004)),
+            "a physical key press must still assign after a mouse click on a tab"
+        );
+    }
+
+    #[test]
+    fn focused_keycap_is_activated_with_enter() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+
+        let mut harness = open_picker_harness(english_picker());
+        harness.get_by_role_and_label(Role::Button, "Q").focus();
+        harness.run();
+        harness.key_press(egui::Key::Enter);
+        harness.run();
+        assert_eq!(
+            harness.state().result,
+            Some(crate::keyboard::KeyBinding::Vial(0x0014))
+        );
+    }
+
     fn macro_picker(selected: u8) -> KeycodePicker {
         KeycodePicker {
             selected_tab: KeycodeTab::Macro,
@@ -1531,15 +1678,18 @@ impl KeycodePicker {
                 // Inline clear control, shown only while a query is present.
                 if !self.search.query.is_empty() {
                     let clear_rect = egui::Rect::from_center_size(
-                        egui::pos2(
-                            search_resp.rect.right() - 14.0,
-                            search_resp.rect.center().y,
-                        ),
+                        egui::pos2(search_resp.rect.right() - 14.0, search_resp.rect.center().y),
                         Vec2::splat(18.0),
                     );
+                    let clear_label = tr_picker(self.language, "key_picker.search_clear");
                     let clear_resp = ui
                         .allocate_rect(clear_rect, egui::Sense::click())
-                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text(clear_label);
+                    clear_resp.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, clear_label)
+                    });
+                    paint_focus_ring(ui, &clear_resp, 4.0);
                     let color = if clear_resp.hovered() {
                         ui.visuals().text_color()
                     } else {

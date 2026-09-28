@@ -63,6 +63,7 @@ press_key_or_click_cancel = "Нажмите клавишу на клавиату
 search_hint = "Поиск по клавишам или нажмите клавишу на клавиатуре"
 search_matches = "Найдено: {count}"
 search_empty = "Ничего не найдено"
+search_clear = "Очистить поиск"
 best_for_normal = "Лучше всего для обычных клавиш, навигации, медиа и спецдействий"
 none_clear = "Нет (очистить)"
 pick_layer_title = "Выбрать слой"
