@@ -3,6 +3,8 @@ use super::*;
 // Picker search. Pipeline: query -> normalize -> memo check -> rows of every
 // visible tab plus the macro and Tap Dance slots -> substring match -> one
 // hit per action -> cached results -> results grouped by tab and section.
+// The memo covers both the query and the picker state the rows derive from,
+// so results follow device data that arrives while the picker is open.
 
 /// Search state of the picker: the live query plus results cached for it.
 #[derive(Default)]
@@ -11,6 +13,8 @@ pub(super) struct PickerSearch {
     pub(super) query: String,
     /// Normalized query the cached results were computed for.
     resolved_query: String,
+    /// `KeycodePicker::row_fingerprint` the cached results were computed for.
+    resolved_fingerprint: Option<u64>,
     results: Vec<PickerRow>,
 }
 
@@ -26,6 +30,7 @@ impl PickerSearch {
     pub(super) fn reset(&mut self) {
         self.query.clear();
         self.resolved_query.clear();
+        self.resolved_fingerprint = None;
         self.results.clear();
     }
 }
@@ -51,13 +56,18 @@ impl KeycodePicker {
         self.search.reset();
     }
 
-    /// Recompute cached search results when the query changed.
+    /// Recompute cached search results when the query or the searchable
+    /// picker state changed (device data, slot names, language...).
     pub(super) fn refresh_vial_search_results(&mut self) {
         let query = normalized_query(&self.search.query);
-        if query == self.search.resolved_query {
+        let fingerprint = self.row_fingerprint();
+        if query == self.search.resolved_query
+            && self.search.resolved_fingerprint == Some(fingerprint)
+        {
             return;
         }
         self.search.resolved_query = query.clone();
+        self.search.resolved_fingerprint = Some(fingerprint);
         self.search.results.clear();
         if query.is_empty() {
             return;
@@ -334,6 +344,97 @@ mod tests {
             .collect();
         assert_eq!(shifts.len(), 1);
         assert_eq!(shifts[0].tab, KeycodeTab::Basic);
+    }
+
+    #[test]
+    fn results_follow_device_data_loaded_after_the_query() {
+        // Macro names arrive with the deferred device load.
+        let mut picker = KeycodePicker {
+            macro_count: 0,
+            macro_names: Vec::new(),
+            ..Default::default()
+        };
+        assert!(search(&mut picker, "signature").is_empty());
+        picker.macro_count = 1;
+        picker.macro_names = vec!["Email signature".into()];
+        picker.refresh_vial_search_results();
+        assert!(results_contain(&picker, 0x7700));
+
+        // Device-defined keycodes appear once the definition is parsed.
+        assert!(search(&mut picker, "scroll mode").is_empty());
+        picker.custom_keycodes.push((
+            "EH_SCR".into(),
+            "Scroll".into(),
+            "Scroll mode".into(),
+            0x7E01,
+        ));
+        picker.refresh_vial_search_results();
+        assert!(results_contain(&picker, 0x7E01));
+
+        // A Tap Dance renamed in its editor is found by the new name.
+        picker.tap_dance_entries = vec![TapDanceEntry::default()];
+        picker.tap_dance_names = vec![String::new()];
+        assert!(search(&mut picker, "wave").is_empty());
+        picker.tap_dance_names[0] = "Wave".into();
+        picker.refresh_vial_search_results();
+        assert!(results_contain(&picker, 0x5700));
+    }
+
+    #[test]
+    fn results_follow_a_language_switch() {
+        let mut picker = KeycodePicker {
+            language: crate::i18n::Language::English,
+            ..Default::default()
+        };
+        assert!(search(&mut picker, "нампад").is_empty());
+        picker.language = crate::i18n::Language::Russian;
+        picker.refresh_vial_search_results();
+        assert!(picker
+            .search
+            .results()
+            .iter()
+            .any(|row| row.section == special_section(&picker, "key_picker_text.numpad")));
+    }
+
+    #[test]
+    fn open_picker_shows_items_loaded_while_it_is_open() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+
+        let mut picker = KeycodePicker {
+            open: true,
+            language: crate::i18n::Language::English,
+            macro_count: 1,
+            macro_names: vec![String::new()],
+            ..Default::default()
+        };
+        picker.search.query = "signature".into();
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1_400.0, 1_000.0))
+            .build_state(
+                |ctx, picker: &mut KeycodePicker| {
+                    picker.show(
+                        ctx,
+                        DeferredPickerDataState::Ready,
+                        DeferredPickerDataState::Ready,
+                    );
+                },
+                picker,
+            );
+        harness.run();
+        assert!(harness.state().search.results().is_empty());
+
+        harness.state_mut().macro_names[0] = "Email signature".into();
+        harness.run();
+        let hit = harness.state().search.results()[0].clone();
+        assert_eq!(hit.action, PickerAction::Assign(KeyBinding::Vial(0x7700)));
+        let name = hit.accessible_name();
+        assert!(
+            harness
+                .query_by_role_and_label(Role::Button, &name)
+                .is_some(),
+            "the new macro should be on screen without retyping the query"
+        );
     }
 
     #[test]
