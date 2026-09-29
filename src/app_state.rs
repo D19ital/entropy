@@ -5216,10 +5216,10 @@ pub struct EntropyApp {
     /// must not redirect the dialog to another profile before Save is clicked.
     pub(crate) application_picker_target_layout_id: Option<String>,
     pub(crate) application_picker_search: String,
-    pub(crate) application_manual_executable: String,
     pub(crate) application_picker_selected: Option<crate::application_layouts::DetectedApplication>,
-    pub(crate) application_picker_layout_name: String,
-    pub(crate) application_picker_title_contains: String,
+    pub(crate) application_layout_rename_focus_requested: bool,
+    pub(crate) application_layout_rename_target_id: Option<String>,
+    pub(crate) application_layout_rename_value: String,
     /// Current firmware type (mirrors layout.firmware)
     pub(crate) firmware: FirmwareProtocol,
     /// QMK setting ids the connected firmware exposes (from the connect probe).

@@ -400,6 +400,25 @@ impl DeviceApplicationLayouts {
             })
     }
 
+    pub(crate) fn rename_layout(&mut self, id: &str, name: &str) -> bool {
+        let name = name.trim();
+        if id == DEFAULT_APPLICATION_LAYOUT_ID
+            || name.is_empty()
+            || self.layout_name_exists(name, Some(id))
+        {
+            return false;
+        }
+        let Some(layout) = self.layouts.get_mut(id) else {
+            return false;
+        };
+        if layout.name == name {
+            return false;
+        }
+        layout.name = name.to_owned();
+        layout.bump_revision();
+        true
+    }
+
     pub(crate) fn application_rule_exists(
         &self,
         application: &DetectedApplication,
@@ -1424,6 +1443,52 @@ mod tests {
         assert!(settings.layout_name_exists("TELEGRAM", None));
         assert!(!settings.layout_name_exists("Telegram", Some(&telegram)));
         assert!(!settings.layout_name_exists("Messenger", None));
+    }
+
+    #[test]
+    fn rename_layout_changes_only_the_display_name_and_revision() {
+        let mut settings = DeviceApplicationLayouts::default();
+        let telegram = settings.create_for_application_named(
+            &app("telegram-desktop", "Telegram"),
+            Some("Telegram"),
+            "",
+        );
+        let before = settings.layouts.get(&telegram).unwrap().clone();
+
+        assert!(settings.rename_layout(&telegram, " Telegram — работа "));
+        let renamed = settings.layouts.get(&telegram).unwrap();
+        assert_eq!(renamed.name, "Telegram — работа");
+        assert_eq!(renamed.executable, before.executable);
+        assert_eq!(
+            renamed.application_identities,
+            before.application_identities
+        );
+        assert_eq!(renamed.layers, before.layers);
+        assert_eq!(renamed.layer_names, before.layer_names);
+        assert_eq!(renamed.automatic_switching, before.automatic_switching);
+        assert_ne!(renamed.revision, before.revision);
+    }
+
+    #[test]
+    fn rename_layout_rejects_default_empty_and_duplicate_names() {
+        let mut settings = DeviceApplicationLayouts::default();
+        let telegram = settings.create_for_application_named(
+            &app("telegram-desktop", "Telegram"),
+            Some("Telegram"),
+            "",
+        );
+        let blender =
+            settings.create_for_application_named(&app("blender", "Blender"), Some("Blender"), "");
+
+        assert!(!settings.rename_layout(DEFAULT_APPLICATION_LAYOUT_ID, "Primary"));
+        assert!(!settings.rename_layout(&telegram, "  "));
+        assert!(!settings.rename_layout(&telegram, " blender "));
+        assert_eq!(settings.layouts[&telegram].name, "Telegram");
+        assert_eq!(settings.layouts[&blender].name, "Blender");
+        assert_eq!(
+            settings.layouts[DEFAULT_APPLICATION_LAYOUT_ID].name,
+            "Default"
+        );
     }
 
     #[test]

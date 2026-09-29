@@ -15,13 +15,23 @@ struct ControlPairGeometry {
 }
 
 const APPLICATION_LAYOUT_CONTROL_GAP: f32 = 8.0;
+const APPLICATION_LAYOUT_DROPDOWN_ARROW_WIDTH: f32 = 32.0;
 
-fn split_control_width(total_width: f32, trailing_width: f32, gap: f32) -> f32 {
-    (total_width - trailing_width - gap).max(0.0)
+fn application_layout_name_area_contains(
+    rect: egui::Rect,
+    pointer: egui::Pos2,
+    arrow_width: f32,
+) -> bool {
+    rect.contains(pointer) && pointer.x < rect.right() - arrow_width
 }
 
-fn paired_button_width(total_width: f32, gap: f32) -> f32 {
-    ((total_width - gap) / 2.0).max(0.0)
+fn application_layout_name_is_invalid(
+    settings: &crate::application_layouts::DeviceApplicationLayouts,
+    target_id: &str,
+    value: &str,
+) -> bool {
+    let value = value.trim();
+    value.is_empty() || settings.layout_name_exists(value, Some(target_id))
 }
 
 fn control_pair_geometry(
@@ -46,17 +56,51 @@ fn control_pair_geometry(
     ControlPairGeometry { leading, trailing }
 }
 
+fn centered_button_pair_geometry(
+    container_rect: egui::Rect,
+    button_size: egui::Vec2,
+    gap: f32,
+) -> ControlPairGeometry {
+    let total_width = button_size.x * 2.0 + gap;
+    let left = container_rect.center().x - total_width / 2.0;
+    let top = container_rect.center().y - button_size.y / 2.0;
+    let leading = egui::Rect::from_min_size(egui::pos2(left, top), button_size);
+    let trailing = egui::Rect::from_min_size(egui::pos2(leading.right() + gap, top), button_size);
+
+    ControlPairGeometry { leading, trailing }
+}
+
+fn automatic_application_layout_name(
+    settings: &crate::application_layouts::DeviceApplicationLayouts,
+    application: &crate::application_layouts::DetectedApplication,
+    excluding_id: Option<&str>,
+) -> String {
+    let base = if application.display_name.trim().is_empty() {
+        application.executable.trim()
+    } else {
+        application.display_name.trim()
+    };
+    let base = if base.is_empty() { "Application" } else { base };
+    if !settings.layout_name_exists(base, excluding_id) {
+        return base.to_owned();
+    }
+    (2..)
+        .map(|suffix| format!("{base} ({suffix})"))
+        .find(|name| !settings.layout_name_exists(name, excluding_id))
+        .unwrap_or_else(|| base.to_owned())
+}
+
 fn application_picker_geometry(viewport: egui::Vec2, scale: f32) -> ApplicationPickerGeometry {
     let horizontal_margin = 24.0 * scale;
     let vertical_margin = 24.0 * scale;
     let available_width = (viewport.x - horizontal_margin * 2.0).max(1.0);
     let available_height = (viewport.y - vertical_margin * 2.0).max(1.0);
     let window_width = (680.0 * scale).min(available_width);
-    let window_height = (520.0 * scale).min(available_height);
+    let window_height = (460.0 * scale).min(available_height);
     let content_width = (window_width - 60.0 * scale)
         .max(220.0 * scale)
         .min((window_width - 20.0 * scale).max(1.0));
-    let list_height = (window_height - 360.0 * scale).clamp(58.0 * scale, 180.0 * scale);
+    let list_height = (window_height - 170.0 * scale).clamp(116.0 * scale, 280.0 * scale);
 
     ApplicationPickerGeometry {
         window_size: egui::vec2(window_width, window_height),
@@ -235,13 +279,6 @@ impl EntropyApp {
         let control_font = metrics.settings_control_font_size();
         ui.spacing_mut().item_spacing.y = 0.0;
 
-        self.draw_application_layouts_section(
-            ui,
-            row_width,
-            row_height,
-            app_layout_text(language, "Общие настройки", "General settings"),
-        );
-
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
             row_width,
@@ -264,7 +301,12 @@ impl EntropyApp {
                     "application_layout_automatic_return_default",
                     &mut automatically_return_to_default,
                     metrics.size(46.0, 24.0),
-                );
+                )
+                .on_hover_text(app_layout_text(
+                    language,
+                    "Если активному приложению не назначена включённая раскладка, Macropad автоматически возвращается к Default",
+                    "When the active application has no enabled assigned layout, Macropad automatically returns to Default",
+                ));
             },
         );
         let mut changed = false;
@@ -276,21 +318,97 @@ impl EntropyApp {
             }
         }
 
-        self.draw_application_layouts_section(
+        self.draw_application_layouts_global_status(
             ui,
+            &device_key,
+            language,
             row_width,
             row_height,
-            app_layout_text(language, "Раскладки", "Layouts"),
+            control_width,
+            control_height,
+            control_font,
         );
 
-        crate::ui_style::settings_list_row(
+        let editing_selected_name =
+            self.application_layout_rename_target_id.as_deref() == Some(selected_id.as_str());
+        let rename_invalid = editing_selected_name
+            && self
+                .app_settings
+                .application_layouts
+                .get(&device_key)
+                .is_some_and(|settings| {
+                    application_layout_name_is_invalid(
+                        settings,
+                        &selected_id,
+                        &self.application_layout_rename_value,
+                    )
+                });
+        let mut submit_rename = false;
+        let mut cancel_rename = false;
+
+        let layout_selector_tooltip = app_layout_text(
+            language,
+            "Нажмите стрелку справа, чтобы выбрать раскладку. Нажмите на имя пользовательской раскладки, чтобы переименовать её",
+            "Click the arrow on the right to select a layout. Click a custom layout name to rename it",
+        );
+        crate::ui_style::settings_list_row_with_tooltip(
             ui,
             row_width,
             row_height,
-            app_layout_text(language, "Раскладка", "Layout"),
+            app_layout_text(language, "Название раскладки", "Layout name"),
             true,
+            Some(layout_selector_tooltip),
             control_width,
             |ui| {
+                if editing_selected_name {
+                    let edit_id = ui.make_persistent_id((
+                        "application_layout_inline_rename",
+                        selected_id.as_str(),
+                    ));
+                    let response = crate::ui_style::allocate_ui_at_rect(
+                        ui,
+                        egui::Rect::from_center_size(
+                            ui.max_rect().center(),
+                            egui::vec2(control_width, control_height),
+                        ),
+                        |ui| {
+                            ui.scope(|ui| {
+                                if rename_invalid {
+                                    ui.visuals_mut().override_text_color =
+                                        Some(egui::Color32::from_rgb(220, 92, 76));
+                                }
+                                crate::ui_style::modern_text_field_sized(
+                                    ui,
+                                    edit_id,
+                                    &mut self.application_layout_rename_value,
+                                    control_width,
+                                    control_height,
+                                    app_layout_text(language, "Название раскладки", "Layout name"),
+                                    80,
+                                    egui::Align::Min,
+                                )
+                            })
+                            .inner
+                        },
+                    )
+                    .inner;
+                    if self.application_layout_rename_focus_requested {
+                        response.request_focus();
+                        self.application_layout_rename_focus_requested = false;
+                    }
+                    if response.has_focus() {
+                        submit_rename = ui.input(|input| input.key_pressed(egui::Key::Enter));
+                        cancel_rename = ui.input(|input| input.key_pressed(egui::Key::Escape));
+                    }
+                    submit_rename |= response.lost_focus();
+                    response.on_hover_text(app_layout_text(
+                        language,
+                        "Введите уникальное имя. Enter или потеря фокуса сохраняет, Esc отменяет. Пустое или повторяющееся имя подсвечивается красным",
+                        "Enter a unique name. Enter or losing focus saves; Esc cancels. An empty or duplicate name is highlighted in red",
+                    ));
+                    return;
+                }
+
                 let dropdown_id = ui.make_persistent_id("application_layout_selector");
                 let dropdown = crate::ui_style::modern_dropdown_button_sized(
                     ui,
@@ -317,8 +435,51 @@ impl EntropyApp {
                         }
                     },
                 );
+                let can_rename =
+                    selected_id != crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID;
+                let clicked_name = dropdown.clicked()
+                    && can_rename
+                    && dropdown.interact_pointer_pos().is_some_and(|pointer| {
+                        application_layout_name_area_contains(
+                            dropdown.rect,
+                            pointer,
+                            metrics.value(APPLICATION_LAYOUT_DROPDOWN_ARROW_WIDTH),
+                        )
+                    });
+                if clicked_name {
+                    egui::Popup::close_id(ui.ctx(), dropdown_id);
+                    self.open_application_layout_rename(&selected_id, &selected_name);
+                }
+                dropdown.on_hover_text(layout_selector_tooltip);
             },
         );
+
+        if cancel_rename {
+            self.close_application_layout_rename();
+        } else if submit_rename {
+            let rename_value = self.application_layout_rename_value.trim().to_owned();
+            let invalid = self
+                .app_settings
+                .application_layouts
+                .get(&device_key)
+                .is_none_or(|settings| {
+                    application_layout_name_is_invalid(settings, &selected_id, &rename_value)
+                });
+            if invalid {
+                self.application_layout_rename_focus_requested = true;
+            } else {
+                if rename_value != selected_name {
+                    if let Some(settings) =
+                        self.app_settings.application_layouts.get_mut(&device_key)
+                    {
+                        if settings.rename_layout(&selected_id, &rename_value) {
+                            save_app_settings(&self.app_settings);
+                        }
+                    }
+                }
+                self.close_application_layout_rename();
+            }
+        }
 
         if snapshot.editor_layout_id != selected_id {
             self.activate_application_layout(&selected_id);
@@ -336,87 +497,6 @@ impl EntropyApp {
             let executable = selected.executable.clone();
             let mut automatic = selected.automatic_switching;
 
-            crate::ui_style::settings_list_row(
-                ui,
-                row_width,
-                row_height,
-                app_layout_text(language, "Действия", "Actions"),
-                true,
-                control_width,
-                |ui| {
-                    let gap = metrics.value(APPLICATION_LAYOUT_CONTROL_GAP);
-                    let button_width = paired_button_width(control_width, gap);
-                    let pair =
-                        control_pair_geometry(ui.max_rect(), button_width, gap, control_height);
-                    if crate::ui_style::allocate_ui_at_rect(ui, pair.leading, |ui| {
-                        crate::ui_style::modern_button(
-                            ui,
-                            app_layout_text(language, "Добавить…", "Add…"),
-                            pair.leading.size(),
-                            true,
-                        )
-                    })
-                    .inner
-                    .clicked()
-                    {
-                        self.open_application_picker(false);
-                    }
-                    if crate::ui_style::allocate_ui_at_rect(ui, pair.trailing, |ui| {
-                        crate::ui_style::modern_button(
-                            ui,
-                            app_layout_text(language, "Удалить", "Delete"),
-                            pair.trailing.size(),
-                            !is_default,
-                        )
-                    })
-                    .inner
-                    .clicked()
-                    {
-                        if let Some(settings) =
-                            self.app_settings.application_layouts.get_mut(&device_key)
-                        {
-                            deleted_layout = settings.remove(&selected.id);
-                            changed |= deleted_layout;
-                        }
-                    }
-                },
-            );
-
-            if !is_default {
-                self.draw_application_layouts_section(
-                    ui,
-                    row_width,
-                    row_height,
-                    &format!(
-                        "{} · {}",
-                        app_layout_text(language, "Настройки приложения", "Application settings"),
-                        selected.name.as_str()
-                    ),
-                );
-            }
-
-            crate::ui_style::settings_list_row_with_tooltip(
-                ui,
-                row_width,
-                row_height,
-                app_layout_text(language, "Автопереключение", "Automatic switching"),
-                !is_default,
-                Some(app_layout_text(
-                    language,
-                    "Включать эту раскладку, когда связанное приложение находится в фокусе",
-                    "Activate this layout when its associated application is focused",
-                )),
-                metrics.value(46.0),
-                |ui| {
-                    crate::ui_style::settings_switch_sized_stable(
-                        ui,
-                        "application_layout_automatic_switching",
-                        &mut automatic,
-                        metrics.size(46.0, 24.0),
-                    );
-                },
-            );
-
             let mut application_display = if is_default {
                 app_layout_text(
                     language,
@@ -427,12 +507,26 @@ impl EntropyApp {
             } else {
                 executable.clone()
             };
-            crate::ui_style::settings_list_row(
+            let application_tooltip = if is_default {
+                app_layout_text(
+                    language,
+                    "Default используется для приложений, которым не назначена отдельная раскладка",
+                    "Default is used for applications that do not have their own assigned layout",
+                )
+            } else {
+                app_layout_text(
+                    language,
+                    "Приложение, связанное с выбранной раскладкой. Нажмите «Изменить», чтобы выбрать другое запущенное приложение",
+                    "The application linked to the selected layout. Click Edit to choose another running application",
+                )
+            };
+            crate::ui_style::settings_list_row_with_tooltip(
                 ui,
                 row_width,
                 row_height,
                 app_layout_text(language, "Приложение", "Application"),
                 !is_default,
+                Some(application_tooltip),
                 control_width,
                 |ui| {
                     let gap = metrics.value(APPLICATION_LAYOUT_CONTROL_GAP);
@@ -450,20 +544,58 @@ impl EntropyApp {
                             egui::Align::Min,
                             false,
                         )
+                        .on_hover_text(application_tooltip)
                     });
-                    if crate::ui_style::allocate_ui_at_rect(ui, pair.trailing, |ui| {
-                        crate::ui_style::modern_button(
-                            ui,
-                            app_layout_text(language, "Изменить", "Edit"),
-                            pair.trailing.size(),
-                            !is_default,
-                        )
-                    })
-                    .inner
-                    .clicked()
-                    {
+                    let edit_response =
+                        crate::ui_style::allocate_ui_at_rect(ui, pair.trailing, |ui| {
+                            crate::ui_style::modern_button(
+                                ui,
+                                app_layout_text(language, "Изменить", "Edit"),
+                                pair.trailing.size(),
+                                !is_default,
+                            )
+                        })
+                        .inner
+                        .on_hover_text(application_tooltip);
+                    if edit_response.clicked() {
                         self.open_application_picker(true);
                     }
+                },
+            );
+
+            let automatic_switching_tooltip = if is_default {
+                app_layout_text(
+                    language,
+                    "Default — запасная раскладка, поэтому автопереключение для неё недоступно",
+                    "Default is the fallback layout, so automatic switching is unavailable for it",
+                )
+            } else {
+                app_layout_text(
+                    language,
+                    "Включать эту раскладку, когда связанное приложение находится в фокусе",
+                    "Activate this layout when its associated application is focused",
+                )
+            };
+            crate::ui_style::settings_list_row_with_tooltip(
+                ui,
+                row_width,
+                row_height,
+                app_layout_text(language, "Автопереключение", "Automatic switching"),
+                !is_default,
+                Some(automatic_switching_tooltip),
+                metrics.value(46.0),
+                |ui| {
+                    crate::ui_style::settings_switch_sized_stable_interactive(
+                        ui,
+                        (
+                            "application_layout_automatic_switching",
+                            selected.id.as_str(),
+                        ),
+                        &mut automatic,
+                        metrics.size(46.0, 24.0),
+                        !is_default,
+                    )
+                    .on_hover_text(automatic_switching_tooltip);
                 },
             );
 
@@ -474,6 +606,59 @@ impl EntropyApp {
                         layout.bump_revision();
                         changed = true;
                     }
+                }
+            }
+
+            ui.add_space(metrics.value(20.0));
+            let action_size = metrics.size(126.0, 34.0);
+            let action_gap = metrics.value(10.0);
+            let (action_bar_rect, _) =
+                ui.allocate_exact_size(egui::vec2(row_width, action_size.y), egui::Sense::hover());
+            let actions = centered_button_pair_geometry(action_bar_rect, action_size, action_gap);
+            let add_response = crate::ui_style::allocate_ui_at_rect(ui, actions.leading, |ui| {
+                crate::ui_style::modern_button(
+                    ui,
+                    app_layout_text(language, "Добавить…", "Add…"),
+                    actions.leading.size(),
+                    true,
+                )
+            })
+            .inner
+            .on_hover_text(app_layout_text(
+                language,
+                "Создать новую раскладку для запущенного приложения",
+                "Create a new layout for a running application",
+            ));
+            if add_response.clicked() {
+                self.open_application_picker(false);
+            }
+            let delete_response =
+                crate::ui_style::allocate_ui_at_rect(ui, actions.trailing, |ui| {
+                    crate::ui_style::modern_button(
+                        ui,
+                        app_layout_text(language, "Удалить", "Delete"),
+                        actions.trailing.size(),
+                        !is_default,
+                    )
+                })
+                .inner
+                .on_hover_text(if is_default {
+                    app_layout_text(
+                        language,
+                        "Default нельзя удалить",
+                        "Default cannot be deleted",
+                    )
+                } else {
+                    app_layout_text(
+                        language,
+                        "Удалить выбранную раскладку приложения",
+                        "Delete the selected application layout",
+                    )
+                });
+            if delete_response.clicked() {
+                if let Some(settings) = self.app_settings.application_layouts.get_mut(&device_key) {
+                    deleted_layout = settings.remove(&selected.id);
+                    changed |= deleted_layout;
                 }
             }
         }
@@ -492,6 +677,23 @@ impl EntropyApp {
             self.reset_matrix_tester_state();
         }
 
+        if changed {
+            save_app_settings(&self.app_settings);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_application_layouts_global_status(
+        &mut self,
+        ui: &mut egui::Ui,
+        device_key: &str,
+        language: crate::i18n::Language,
+        row_width: f32,
+        row_height: f32,
+        control_width: f32,
+        control_height: f32,
+        control_font: f32,
+    ) {
         let detector = self.application_discovery.foreground_status.clone();
         let (detector_text, detector_ok) = match &detector.state {
             crate::app_discovery::ForegroundState::BackendUnavailable(error) => {
@@ -508,17 +710,23 @@ impl EntropyApp {
                 true,
             ),
         };
-        crate::ui_style::settings_list_row(
+        let detector_tooltip = app_layout_text(
+            language,
+            "Показывает механизм, через который Entropy определяет активное окно. Наведите на значение, чтобы увидеть полный статус",
+            "Shows the mechanism Entropy uses to detect the active window. Hover the value to see the full status",
+        );
+        crate::ui_style::settings_list_row_with_tooltip(
             ui,
             row_width,
             row_height,
             app_layout_text(language, "Детектор окон", "Window detector"),
             true,
+            Some(detector_tooltip),
             control_width,
             |ui| {
                 ui.add_sized(
                     [control_width, control_height],
-                    egui::Label::new(RichText::new(detector_text).size(control_font).color(
+                    egui::Label::new(RichText::new(&detector_text).size(control_font).color(
                         if detector_ok {
                             app_muted_text(ui.visuals().dark_mode)
                         } else {
@@ -541,12 +749,18 @@ impl EntropyApp {
         let show_gnome_integration = false;
 
         if show_gnome_integration {
-            crate::ui_style::settings_list_row(
+            let integration_tooltip = app_layout_text(
+                language,
+                "Устанавливает включённую в Entropy интеграцию GNOME для определения активного окна в Wayland",
+                "Installs the GNOME integration bundled with Entropy to detect the active window on Wayland",
+            );
+            crate::ui_style::settings_list_row_with_tooltip(
                 ui,
                 row_width,
                 row_height,
                 app_layout_text(language, "Интеграция GNOME", "GNOME integration"),
                 true,
+                Some(integration_tooltip),
                 control_width,
                 |ui| {
                     #[cfg(target_os = "linux")]
@@ -569,6 +783,7 @@ impl EntropyApp {
                         egui::vec2(control_width, control_height),
                         true,
                     )
+                    .on_hover_text(integration_tooltip)
                     .clicked()
                     {
                         #[cfg(target_os = "linux")]
@@ -583,12 +798,13 @@ impl EntropyApp {
             {
                 let (message, color) =
                     self.gnome_integration_install_feedback(language, ui.visuals().dark_mode);
-                crate::ui_style::settings_list_row(
+                crate::ui_style::settings_list_row_with_tooltip(
                     ui,
                     row_width,
                     row_height,
                     app_layout_text(language, "Статус установки", "Installation status"),
                     true,
+                    Some(&message),
                     control_width,
                     |ui| {
                         ui.add_sized(
@@ -597,8 +813,7 @@ impl EntropyApp {
                                 RichText::new(&message).size(control_font).color(color),
                             )
                             .truncate(),
-                        )
-                        .on_hover_text(message);
+                        );
                     },
                 );
             }
@@ -624,18 +839,24 @@ impl EntropyApp {
                 app_layout_text(language, "детектор недоступен", "detector unavailable").to_owned()
             }
         };
-        crate::ui_style::settings_list_row(
+        let foreground_tooltip = app_layout_text(
+            language,
+            "Приложение, окно которого сейчас находится в фокусе и используется для автопереключения",
+            "The application whose window is currently focused and used for automatic switching",
+        );
+        crate::ui_style::settings_list_row_with_tooltip(
             ui,
             row_width,
             row_height,
             app_layout_text(language, "Приложение в фокусе", "Focused application"),
             true,
+            Some(foreground_tooltip),
             control_width,
             |ui| {
                 ui.add_sized(
                     [control_width, control_height],
                     egui::Label::new(
-                        RichText::new(foreground)
+                        RichText::new(&foreground)
                             .size(control_font)
                             .color(app_muted_text(ui.visuals().dark_mode)),
                     )
@@ -647,22 +868,28 @@ impl EntropyApp {
         let active_layout = self
             .app_settings
             .application_layouts
-            .get(&device_key)
+            .get(device_key)
             .and_then(|settings| settings.active_layout())
             .map(|layout| layout.name.clone())
             .unwrap_or_else(|| "Default".to_owned());
-        crate::ui_style::settings_list_row(
+        let active_layout_tooltip = app_layout_text(
+            language,
+            "Раскладка, которая сейчас активна на Macropad",
+            "The layout that is currently active on Macropad",
+        );
+        crate::ui_style::settings_list_row_with_tooltip(
             ui,
             row_width,
             row_height,
             app_layout_text(language, "Активная раскладка", "Active layout"),
             true,
+            Some(active_layout_tooltip),
             control_width,
             |ui| {
                 ui.add_sized(
                     [control_width, control_height],
                     egui::Label::new(
-                        RichText::new(active_layout)
+                        RichText::new(&active_layout)
                             .size(control_font)
                             .color(app_muted_text(ui.visuals().dark_mode)),
                     )
@@ -670,10 +897,6 @@ impl EntropyApp {
                 );
             },
         );
-
-        if changed {
-            save_app_settings(&self.app_settings);
-        }
     }
 
     #[cfg(target_os = "linux")]
@@ -764,26 +987,19 @@ impl EntropyApp {
         }
     }
 
-    fn draw_application_layouts_section(
-        &self,
-        ui: &mut egui::Ui,
-        width: f32,
-        height: f32,
-        title: &str,
-    ) {
-        let dark = ui.visuals().dark_mode;
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
-        ui.painter().line_segment(
-            [rect.left_bottom(), rect.right_bottom()],
-            egui::Stroke::new(1.0, crate::ui_style::border_color(dark)),
-        );
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            title,
-            egui::FontId::proportional(12.5),
-            app_muted_text(dark),
-        );
+    fn open_application_layout_rename(&mut self, id: &str, current_name: &str) {
+        if id == crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID {
+            return;
+        }
+        self.application_layout_rename_target_id = Some(id.to_owned());
+        self.application_layout_rename_value = current_name.to_owned();
+        self.application_layout_rename_focus_requested = true;
+    }
+
+    fn close_application_layout_rename(&mut self) {
+        self.application_layout_rename_focus_requested = false;
+        self.application_layout_rename_target_id = None;
+        self.application_layout_rename_value.clear();
     }
 
     fn open_application_picker(&mut self, assign_existing: bool) {
@@ -791,10 +1007,7 @@ impl EntropyApp {
         self.application_picker_target_layout_id = None;
         self.application_picker_open = true;
         self.application_picker_search.clear();
-        self.application_manual_executable.clear();
         self.application_picker_selected = None;
-        self.application_picker_layout_name.clear();
-        self.application_picker_title_contains.clear();
 
         if assign_existing {
             let selected = self
@@ -807,8 +1020,6 @@ impl EntropyApp {
                 .cloned();
             if let Some(layout) = selected {
                 self.application_picker_target_layout_id = Some(layout.id.clone());
-                self.application_picker_layout_name = layout.name.clone();
-                self.application_picker_title_contains = layout.title_contains.clone();
                 self.application_picker_selected =
                     Some(crate::application_layouts::DetectedApplication {
                         executable: layout.executable,
@@ -821,27 +1032,19 @@ impl EntropyApp {
         crate::app_discovery::refresh_application_discovery();
     }
 
-    fn application_picker_validation(&self) -> (bool, bool) {
+    fn application_picker_has_duplicate_rule(&self) -> bool {
         let Some(device_key) = self.application_layout_device_key() else {
-            return (false, false);
+            return false;
         };
         let Some(settings) = self.app_settings.application_layouts.get(&device_key) else {
-            return (false, false);
+            return false;
         };
         let excluding_id = self.application_picker_target_layout_id.as_deref();
-        let duplicate_name =
-            settings.layout_name_exists(&self.application_picker_layout_name, excluding_id);
-        let duplicate_rule = self
-            .application_picker_selected
+        self.application_picker_selected
             .as_ref()
             .is_some_and(|application| {
-                settings.application_rule_exists(
-                    application,
-                    &self.application_picker_title_contains,
-                    excluding_id,
-                )
-            });
-        (duplicate_name, duplicate_rule)
+                settings.application_rule_exists(application, "", excluding_id)
+            })
     }
 
     fn draw_application_picker_v2(&mut self, ctx: &egui::Context) {
@@ -854,8 +1057,11 @@ impl EntropyApp {
         let mut open = self.application_picker_open;
         let mut confirm = false;
         let mut cancel = false;
-        let applications = self.application_discovery.available.clone();
+        let applications = crate::app_discovery::running_application_choices(
+            &self.application_discovery.available,
+        );
         let search = self.application_picker_search.trim().to_ascii_lowercase();
+        ctx.request_repaint_after(std::time::Duration::from_millis(500));
 
         let picker_window_id = egui::Id::new("application_picker_v2");
         let window_center_x = ctx.content_rect().center().x;
@@ -885,116 +1091,31 @@ impl EntropyApp {
                 geometry.content_width,
                 |ui, content_width| {
                     ui.add_space(metrics.value(4.0));
-                    let (duplicate_name, duplicate_rule) = self.application_picker_validation();
                     ui.label(
                         RichText::new(app_layout_text(
                             language,
-                            "Название раскладки",
-                            "Layout name",
+                            "Показаны открытые пользовательские приложения. Список обновляется автоматически.",
+                            "Open user applications are shown. The list updates automatically.",
                         ))
                         .size(metrics.value(12.0))
                         .color(app_muted_text(ui.visuals().dark_mode)),
                     );
-                    ui.add_space(metrics.value(6.0));
-                    ui.scope(|ui| {
-                        if duplicate_name {
-                            ui.visuals_mut().override_text_color =
-                                Some(egui::Color32::from_rgb(220, 92, 76));
-                        }
-                        crate::ui_style::modern_text_field_sized(
-                            ui,
-                            ui.make_persistent_id("application_picker_layout_name_v2"),
-                            &mut self.application_picker_layout_name,
-                            content_width,
-                            metrics.settings_control_height(),
-                            app_layout_text(language, "Название приложения", "Application name"),
-                            64,
-                            egui::Align::Min,
-                        );
-                    });
-                    if duplicate_name {
-                        ui.label(
-                            RichText::new(app_layout_text(
-                                language,
-                                "Такое название уже существует",
-                                "This name already exists",
-                            ))
-                            .size(metrics.value(11.0))
-                            .color(egui::Color32::from_rgb(220, 92, 76)),
-                        );
-                    }
-
-                    if duplicate_rule {
-                        ui.add_space(metrics.value(8.0));
-                        ui.label(
-                            RichText::new(app_layout_text(
-                                language,
-                                "Для выбранного приложения уже существует такое правило. Пустой фрагмент заголовка допустим",
-                                "The selected application already has this rule. An empty title fragment is valid",
-                            ))
-                            .size(metrics.value(11.0))
-                            .color(egui::Color32::from_rgb(220, 92, 76)),
-                        );
-                    }
-
                     ui.add_space(metrics.value(10.0));
-                    ui.label(
-                        RichText::new(app_layout_text(
-                            language,
-                            "Фрагмент заголовка окна — необязательно",
-                            "Window title fragment — optional",
-                        ))
-                        .size(metrics.value(12.0))
-                        .color(app_muted_text(ui.visuals().dark_mode)),
-                    );
-                    ui.add_space(metrics.value(6.0));
                     crate::ui_style::modern_text_field_sized(
                         ui,
-                        ui.make_persistent_id("application_picker_title_v2"),
-                        &mut self.application_picker_title_contains,
+                        ui.make_persistent_id("application_picker_search_v2"),
+                        &mut self.application_picker_search,
                         content_width,
                         metrics.settings_control_height(),
-                        app_layout_text(language, "Например: Прошивка", "For example: Firmware"),
+                        app_layout_text(language, "Поиск приложения", "Search applications"),
                         120,
                         egui::Align::Min,
-                    );
-                    ui.add_space(metrics.value(12.0));
-                    let control_height = metrics.settings_control_height();
-                    let (row_rect, _) = ui.allocate_exact_size(
-                        egui::vec2(content_width, control_height),
-                        egui::Sense::hover(),
-                    );
-                    let pair = control_pair_geometry(
-                        row_rect,
-                        metrics.value(104.0),
-                        metrics.value(APPLICATION_LAYOUT_CONTROL_GAP),
-                        control_height,
-                    );
-                    crate::ui_style::allocate_ui_at_rect(ui, pair.leading, |ui| {
-                        crate::ui_style::modern_text_field_sized(
-                            ui,
-                            ui.make_persistent_id("application_picker_search_v2"),
-                            &mut self.application_picker_search,
-                            pair.leading.width(),
-                            pair.leading.height(),
-                            app_layout_text(language, "Поиск приложения", "Search applications"),
-                            120,
-                            egui::Align::Min,
-                        )
-                    });
-                    if crate::ui_style::allocate_ui_at_rect(ui, pair.trailing, |ui| {
-                        crate::ui_style::modern_button(
-                            ui,
-                            app_layout_text(language, "Обновить", "Refresh"),
-                            pair.trailing.size(),
-                            true,
-                        )
-                    })
-                    .inner
-                    .clicked()
-                    {
-                        crate::app_discovery::refresh_application_discovery();
-                    }
+                    )
+                    .on_hover_text(app_layout_text(
+                        language,
+                        "Фильтрует список запущенных приложений по названию и исполняемому файлу",
+                        "Filters running applications by name and executable",
+                    ));
                     ui.add_space(metrics.value(10.0));
 
                     let filtered = applications
@@ -1028,17 +1149,31 @@ impl EntropyApp {
                                             ui,
                                             app_layout_text(
                                                 language,
-                                                "Приложения не найдены",
-                                                "No applications found",
+                                                "Открытые приложения не найдены. Запустите нужное приложение — оно появится автоматически.",
+                                                "No open applications found. Launch an application and it will appear automatically.",
                                             ),
                                             None,
                                         );
                                     }
                                     for application in filtered {
                                         let (rect, response) = ui.allocate_exact_size(
-                                            egui::vec2(ui.available_width(), metrics.value(58.0)),
+                                            egui::vec2(ui.available_width(), metrics.value(44.0)),
                                             egui::Sense::click(),
                                         );
+                                        let response = response.on_hover_text(format!(
+                                            "{}\n{}: {}",
+                                            app_layout_text(
+                                                language,
+                                                "Выбрать это приложение",
+                                                "Select this application",
+                                            ),
+                                            app_layout_text(
+                                                language,
+                                                "Исполняемый файл",
+                                                "Executable",
+                                            ),
+                                            application.executable,
+                                        ));
                                         if response.hovered() {
                                             ui.painter().rect_filled(
                                                 rect,
@@ -1068,91 +1203,36 @@ impl EntropyApp {
                                         }
                                         let left = rect.left() + metrics.value(12.0);
                                         ui.painter().text(
-                                            egui::pos2(left, rect.top() + metrics.value(17.0)),
+                                            egui::pos2(left, rect.center().y),
                                             egui::Align2::LEFT_CENTER,
                                             application.label(),
                                             egui::FontId::proportional(metrics.value(13.0)),
                                             ui.visuals().text_color(),
                                         );
-                                        ui.painter().text(
-                                            egui::pos2(left, rect.top() + metrics.value(39.0)),
-                                            egui::Align2::LEFT_CENTER,
-                                            &application.executable,
-                                            egui::FontId::proportional(metrics.value(11.0)),
-                                            app_muted_text(ui.visuals().dark_mode),
-                                        );
                                         if response.clicked() {
                                             self.application_picker_selected =
                                                 Some((*application).clone());
-                                            self.application_picker_layout_name =
-                                                if application.display_name.trim().is_empty() {
-                                                    application.executable.trim().to_owned()
-                                                } else {
-                                                    application.display_name.trim().to_owned()
-                                                };
                                             ui.ctx().request_repaint();
                                         }
                                     }
                                 });
                         });
 
-                    ui.add_space(metrics.value(10.0));
-                    let control_height = metrics.settings_control_height();
-                    let (row_rect, _) = ui.allocate_exact_size(
-                        egui::vec2(content_width, control_height),
-                        egui::Sense::hover(),
-                    );
-                    let pair = control_pair_geometry(
-                        row_rect,
-                        metrics.value(104.0),
-                        metrics.value(APPLICATION_LAYOUT_CONTROL_GAP),
-                        control_height,
-                    );
-                    crate::ui_style::allocate_ui_at_rect(ui, pair.leading, |ui| {
-                        crate::ui_style::modern_text_field_sized(
-                            ui,
-                            ui.make_persistent_id("application_picker_manual_v2"),
-                            &mut self.application_manual_executable,
-                            pair.leading.width(),
-                            pair.leading.height(),
-                            app_layout_text(
-                                language,
-                                "Исполняемый файл: figma, code, blender",
-                                "Executable: figma, code, blender",
-                            ),
-                            120,
-                            egui::Align::Min,
-                        )
-                    });
-                    if crate::ui_style::allocate_ui_at_rect(ui, pair.trailing, |ui| {
-                        crate::ui_style::modern_button(
-                            ui,
-                            app_layout_text(language, "Использовать", "Use"),
-                            pair.trailing.size(),
-                            !self.application_manual_executable.trim().is_empty(),
-                        )
-                    })
-                    .inner
-                    .clicked()
-                    {
-                        let executable = self.application_manual_executable.trim().to_owned();
-                        self.application_picker_selected =
-                            Some(crate::application_layouts::DetectedApplication {
-                                display_name: executable.clone(),
-                                identities: vec![executable.clone()],
-                                executable: executable.clone(),
-                                window_title: String::new(),
-                            });
-                        self.application_picker_layout_name = executable;
-                        ui.ctx().request_repaint();
-                    }
-
                     ui.add_space(metrics.value(12.0));
-                    let (duplicate_name, duplicate_rule) = self.application_picker_validation();
-                    let can_confirm = self.application_picker_selected.is_some()
-                        && !self.application_picker_layout_name.trim().is_empty()
-                        && !duplicate_name
-                        && !duplicate_rule;
+                    let duplicate_rule = self.application_picker_has_duplicate_rule();
+                    if duplicate_rule {
+                        ui.label(
+                            RichText::new(app_layout_text(
+                                language,
+                                "Для этого приложения уже создана раскладка",
+                                "A layout already exists for this application",
+                            ))
+                            .size(metrics.value(11.0))
+                            .color(egui::Color32::from_rgb(220, 92, 76)),
+                        );
+                        ui.add_space(metrics.value(6.0));
+                    }
+                    let can_confirm = self.application_picker_selected.is_some() && !duplicate_rule;
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
                         confirm = crate::ui_style::modern_button(
@@ -1165,6 +1245,19 @@ impl EntropyApp {
                             metrics.size(120.0, 32.0),
                             can_confirm,
                         )
+                        .on_hover_text(if self.application_picker_assign_existing {
+                            app_layout_text(
+                                language,
+                                "Сохранить новое приложение для выбранной раскладки",
+                                "Save the new application for the selected layout",
+                            )
+                        } else {
+                            app_layout_text(
+                                language,
+                                "Создать раскладку для выбранного приложения",
+                                "Create a layout for the selected application",
+                            )
+                        })
                         .clicked();
                         ui.add_space(metrics.value(APPLICATION_LAYOUT_CONTROL_GAP));
                         cancel = crate::ui_style::modern_button(
@@ -1173,6 +1266,11 @@ impl EntropyApp {
                             metrics.size(104.0, 32.0),
                             true,
                         )
+                        .on_hover_text(app_layout_text(
+                            language,
+                            "Закрыть окно без изменений",
+                            "Close the window without changes",
+                        ))
                         .clicked();
                     });
                 },
@@ -1181,11 +1279,7 @@ impl EntropyApp {
 
         if confirm {
             if let Some(application) = self.application_picker_selected.clone() {
-                self.apply_picker_selection(
-                    application,
-                    self.application_picker_layout_name.clone(),
-                    self.application_picker_title_contains.clone(),
-                );
+                self.apply_picker_selection(application);
             }
             open = false;
         }
@@ -1195,9 +1289,6 @@ impl EntropyApp {
         if !open {
             self.application_picker_selected = None;
             self.application_picker_target_layout_id = None;
-            self.application_picker_layout_name.clear();
-            self.application_picker_title_contains.clear();
-            self.application_manual_executable.clear();
         }
         self.application_picker_open = open;
     }
@@ -1205,8 +1296,6 @@ impl EntropyApp {
     fn apply_picker_selection(
         &mut self,
         application: crate::application_layouts::DetectedApplication,
-        name: String,
-        title_contains: String,
     ) {
         let Some(device_key) = self.application_layout_device_key() else {
             return;
@@ -1216,273 +1305,15 @@ impl EntropyApp {
             .application_layouts
             .entry(device_key)
             .or_default();
+        let name = automatic_application_layout_name(
+            settings,
+            &application,
+            self.application_picker_target_layout_id.as_deref(),
+        );
         if let Some(target_id) = self.application_picker_target_layout_id.as_deref() {
-            settings.update_application_rule(target_id, &application, &name, &title_contains);
+            settings.update_application_rule(target_id, &application, &name, "");
         } else {
-            settings.create_for_application_named(&application, Some(&name), &title_contains);
-        }
-        save_app_settings(&self.app_settings);
-    }
-
-    #[allow(dead_code)]
-    fn draw_application_picker(&mut self, ctx: &egui::Context) {
-        if !self.application_picker_open {
-            return;
-        }
-        let language = self.app_settings.language;
-        let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ctx);
-        let mut open = self.application_picker_open;
-        let mut picked: Option<crate::application_layouts::DetectedApplication> = None;
-        let mut manual_add = false;
-        let applications = self.application_discovery.available.clone();
-        let search = self.application_picker_search.trim().to_ascii_lowercase();
-
-        let modal_size = metrics.size(680.0, 540.0);
-        crate::ui_style::centered_modal_window(
-            ctx,
-            app_layout_text(language, "Выбор приложения", "Choose application"),
-            egui::Id::new("application_picker"),
-            &mut open,
-            modal_size,
-        )
-        .show(ctx, |ui| {
-            let content_width = metrics.value(620.0);
-            crate::ui_style::modal_content(
-                ui,
-                crate::ui_style::ModalLayout::new(content_width)
-                    .with_top_padding(metrics.value(8.0)),
-                |ui| {
-                    ui.label(
-                        RichText::new(app_layout_text(
-                            language,
-                            "Выберите установленное или запущенное приложение",
-                            "Select an installed or running application",
-                        ))
-                        .size(metrics.value(12.5))
-                        .color(app_muted_text(ui.visuals().dark_mode)),
-                    );
-                    ui.add_space(metrics.value(12.0));
-                    let control_height = metrics.settings_control_height();
-                    let (row_rect, _) = ui.allocate_exact_size(
-                        egui::vec2(content_width, control_height),
-                        egui::Sense::hover(),
-                    );
-                    let pair = control_pair_geometry(
-                        row_rect,
-                        metrics.value(104.0),
-                        metrics.value(APPLICATION_LAYOUT_CONTROL_GAP),
-                        control_height,
-                    );
-                    crate::ui_style::allocate_ui_at_rect(ui, pair.leading, |ui| {
-                        crate::ui_style::modern_text_field_sized(
-                            ui,
-                            ui.make_persistent_id("application_picker_search"),
-                            &mut self.application_picker_search,
-                            pair.leading.width(),
-                            pair.leading.height(),
-                            app_layout_text(language, "Поиск приложения", "Search applications"),
-                            120,
-                            egui::Align::Min,
-                        )
-                    });
-                    if crate::ui_style::allocate_ui_at_rect(ui, pair.trailing, |ui| {
-                        crate::ui_style::modern_button(
-                            ui,
-                            app_layout_text(language, "Обновить", "Refresh"),
-                            pair.trailing.size(),
-                            true,
-                        )
-                    })
-                    .inner
-                    .clicked()
-                    {
-                        crate::app_discovery::refresh_application_discovery();
-                    }
-                    ui.add_space(metrics.value(12.0));
-
-                    let filtered = applications
-                        .iter()
-                        .filter(|application| {
-                            search.is_empty()
-                                || application.label().to_ascii_lowercase().contains(&search)
-                                || application
-                                    .executable
-                                    .to_ascii_lowercase()
-                                    .contains(&search)
-                        })
-                        .collect::<Vec<_>>();
-                    egui::Frame::new()
-                        .fill(app_surface_fill(ui.visuals().dark_mode))
-                        .stroke(crate::ui_style::modal_outline_stroke(
-                            ui.visuals().dark_mode,
-                        ))
-                        .corner_radius(metrics.value(10.0))
-                        .inner_margin(metrics.value(8.0))
-                        .show(ui, |ui| {
-                            ui.set_width(content_width - metrics.value(18.0));
-                            egui::ScrollArea::vertical()
-                                .id_salt("application_picker_list")
-                                .max_height(metrics.value(292.0))
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    if filtered.is_empty() {
-                                        crate::ui_style::modal_empty_state(
-                                            ui,
-                                            app_layout_text(
-                                                language,
-                                                "Приложения не найдены",
-                                                "No applications found",
-                                            ),
-                                            None,
-                                        );
-                                    }
-                                    for application in filtered {
-                                        let row_width = ui.available_width();
-                                        let row_height = metrics.value(58.0);
-                                        let (rect, response) = ui.allocate_exact_size(
-                                            egui::vec2(row_width, row_height),
-                                            egui::Sense::click(),
-                                        );
-                                        if response.hovered() {
-                                            ui.painter().rect_filled(
-                                                rect,
-                                                metrics.value(8.0),
-                                                app_hover_fill(ui.visuals().dark_mode),
-                                            );
-                                            ui.ctx()
-                                                .set_cursor_icon(egui::CursorIcon::PointingHand);
-                                        }
-                                        let text_left = rect.left() + metrics.value(12.0);
-                                        ui.painter().text(
-                                            egui::pos2(text_left, rect.top() + metrics.value(17.0)),
-                                            egui::Align2::LEFT_CENTER,
-                                            application.label(),
-                                            egui::FontId::proportional(metrics.value(13.0)),
-                                            ui.visuals().text_color(),
-                                        );
-                                        let detail = if application.window_title.trim().is_empty() {
-                                            application.executable.clone()
-                                        } else {
-                                            format!(
-                                                "{}  ·  {}",
-                                                application.executable,
-                                                application.window_title.trim()
-                                            )
-                                        };
-                                        ui.painter()
-                                            .with_clip_rect(rect.shrink(metrics.value(8.0)))
-                                            .text(
-                                                egui::pos2(
-                                                    text_left,
-                                                    rect.top() + metrics.value(39.0),
-                                                ),
-                                                egui::Align2::LEFT_CENTER,
-                                                detail,
-                                                egui::FontId::proportional(metrics.value(11.0)),
-                                                app_muted_text(ui.visuals().dark_mode),
-                                            );
-                                        ui.painter().line_segment(
-                                            [rect.left_bottom(), rect.right_bottom()],
-                                            egui::Stroke::new(
-                                                1.0_f32,
-                                                crate::ui_style::border_color(
-                                                    ui.visuals().dark_mode,
-                                                ),
-                                            ),
-                                        );
-                                        if response.clicked() {
-                                            picked = Some((*application).clone());
-                                        }
-                                    }
-                                });
-                        });
-
-                    ui.add_space(metrics.value(14.0));
-                    ui.label(
-                        RichText::new(app_layout_text(
-                            language,
-                            "Нет в списке? Укажите имя исполняемого файла",
-                            "Not listed? Enter the executable name",
-                        ))
-                        .size(metrics.value(12.0))
-                        .color(app_muted_text(ui.visuals().dark_mode)),
-                    );
-                    ui.add_space(metrics.value(8.0));
-                    let control_height = metrics.settings_control_height();
-                    let (row_rect, _) = ui.allocate_exact_size(
-                        egui::vec2(content_width, control_height),
-                        egui::Sense::hover(),
-                    );
-                    let pair = control_pair_geometry(
-                        row_rect,
-                        metrics.value(104.0),
-                        metrics.value(APPLICATION_LAYOUT_CONTROL_GAP),
-                        control_height,
-                    );
-                    crate::ui_style::allocate_ui_at_rect(ui, pair.leading, |ui| {
-                        crate::ui_style::modern_text_field_sized(
-                            ui,
-                            ui.make_persistent_id("application_picker_manual"),
-                            &mut self.application_manual_executable,
-                            pair.leading.width(),
-                            pair.leading.height(),
-                            "figma, code, blender",
-                            120,
-                            egui::Align::Min,
-                        )
-                    });
-                    manual_add = crate::ui_style::allocate_ui_at_rect(ui, pair.trailing, |ui| {
-                        crate::ui_style::modern_button(
-                            ui,
-                            app_layout_text(language, "Использовать", "Use"),
-                            pair.trailing.size(),
-                            !self.application_manual_executable.trim().is_empty(),
-                        )
-                    })
-                    .inner
-                    .clicked();
-                },
-            );
-        });
-
-        if manual_add {
-            let executable = self.application_manual_executable.trim().to_owned();
-            picked = Some(crate::application_layouts::DetectedApplication {
-                display_name: executable.clone(),
-                identities: vec![executable.clone()],
-                executable,
-                window_title: String::new(),
-            });
-        }
-        if let Some(application) = picked {
-            self.apply_picked_application(application);
-            self.application_manual_executable.clear();
-            open = false;
-        }
-        self.application_picker_open = open;
-    }
-
-    fn apply_picked_application(
-        &mut self,
-        application: crate::application_layouts::DetectedApplication,
-    ) {
-        let Some(device_key) = self.application_layout_device_key() else {
-            return;
-        };
-        let settings = self
-            .app_settings
-            .application_layouts
-            .entry(device_key)
-            .or_default();
-        if let Some(target_id) = self.application_picker_target_layout_id.as_deref() {
-            let existing_name = settings
-                .layouts
-                .get(target_id)
-                .map(|layout| layout.name.clone())
-                .unwrap_or_default();
-            settings.update_application_rule(target_id, &application, &existing_name, "");
-        } else {
-            settings.create_for_application(&application);
+            settings.create_for_application_named(&application, Some(&name), "");
         }
         save_app_settings(&self.app_settings);
     }
@@ -1492,64 +1323,116 @@ impl EntropyApp {
 mod tests {
     use super::*;
 
-    #[test]
-    fn application_form_columns_use_one_exact_gap() {
-        let total = 260.0;
-        let gap = APPLICATION_LAYOUT_CONTROL_GAP;
-        let trailing = 82.0;
-        let leading = split_control_width(total, trailing, gap);
-
-        assert_eq!(leading, 170.0);
-        assert_eq!(leading + gap + trailing, total);
+    fn detected_application(
+        executable: &str,
+        display_name: &str,
+    ) -> crate::application_layouts::DetectedApplication {
+        crate::application_layouts::DetectedApplication {
+            executable: executable.to_owned(),
+            identities: vec![executable.to_owned()],
+            display_name: display_name.to_owned(),
+            window_title: String::new(),
+        }
     }
 
     #[test]
-    fn application_action_buttons_fit_the_control_column() {
-        let total = 260.0;
-        let gap = APPLICATION_LAYOUT_CONTROL_GAP;
-        let button = paired_button_width(total, gap);
+    fn inline_rename_marks_empty_and_duplicate_names_invalid() {
+        let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+        let telegram = settings.create_for_application_named(
+            &detected_application("telegram-desktop", "Telegram"),
+            Some("Telegram"),
+            "",
+        );
+        settings.create_for_application_named(
+            &detected_application("org.blender.Blender", "Blender"),
+            Some("Blender"),
+            "",
+        );
 
-        assert_eq!(button, 126.0);
-        assert_eq!(button + gap + button, total);
+        assert!(application_layout_name_is_invalid(
+            &settings, &telegram, "  "
+        ));
+        assert!(application_layout_name_is_invalid(
+            &settings,
+            &telegram,
+            " blender "
+        ));
+        assert!(!application_layout_name_is_invalid(
+            &settings, &telegram, "Telegram"
+        ));
+        assert!(!application_layout_name_is_invalid(
+            &settings,
+            &telegram,
+            "Telegram — работа"
+        ));
     }
 
     #[test]
-    fn application_action_row_does_not_cross_its_control_boundary() {
-        let control = egui::Rect::from_min_size(egui::pos2(342.0, 10.0), egui::vec2(260.0, 54.0));
-        let gap = APPLICATION_LAYOUT_CONTROL_GAP;
-        let button = paired_button_width(control.width(), gap);
-        let pair = control_pair_geometry(control, button, gap, 32.0);
+    fn layout_name_click_excludes_the_dropdown_arrow() {
+        let rect = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(260.0, 32.0));
 
-        assert!((pair.trailing.left() - pair.leading.right() - gap).abs() <= 0.01);
-        assert!((pair.leading.left() - control.left()).abs() <= 0.01);
-        assert!((pair.trailing.right() - control.right()).abs() <= 0.01);
+        assert!(application_layout_name_area_contains(
+            rect,
+            egui::pos2(120.0, 36.0),
+            APPLICATION_LAYOUT_DROPDOWN_ARROW_WIDTH,
+        ));
+        assert!(!application_layout_name_area_contains(
+            rect,
+            egui::pos2(255.0, 36.0),
+            APPLICATION_LAYOUT_DROPDOWN_ARROW_WIDTH,
+        ));
     }
 
     #[test]
-    fn action_and_application_rows_use_the_same_visual_gap_at_scaled_ui() {
+    fn automatic_layout_names_are_unique_without_a_manual_name_field() {
+        let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+        let first = crate::application_layouts::DetectedApplication {
+            executable: "first-settings".to_owned(),
+            identities: vec!["first-settings".to_owned()],
+            display_name: "Settings".to_owned(),
+            window_title: String::new(),
+        };
+        settings.create_for_application_named(&first, Some("Settings"), "");
+        let second = crate::application_layouts::DetectedApplication {
+            executable: "second-settings".to_owned(),
+            identities: vec!["second-settings".to_owned()],
+            display_name: "Settings".to_owned(),
+            window_title: String::new(),
+        };
+
+        assert_eq!(
+            automatic_application_layout_name(&settings, &second, None),
+            "Settings (2)"
+        );
+    }
+
+    #[test]
+    fn bottom_layout_actions_are_centered_with_the_standard_gap() {
         let scale = 1.12;
-        let control = egui::Rect::from_min_size(
-            egui::pos2(342.0, 10.0),
-            egui::vec2(260.0 * scale, 54.0 * scale),
+        let container = egui::Rect::from_min_size(
+            egui::pos2(20.0, 10.0),
+            egui::vec2(602.0 * scale, 34.0 * scale),
         );
-        let gap = APPLICATION_LAYOUT_CONTROL_GAP * scale;
-        let action = control_pair_geometry(
-            control,
-            paired_button_width(control.width(), gap),
-            gap,
-            32.0 * scale,
-        );
-        let application = control_pair_geometry(control, 82.0 * scale, gap, 32.0 * scale);
+        let button_size = egui::vec2(126.0 * scale, 34.0 * scale);
+        let gap = 10.0 * scale;
+        let actions = centered_button_pair_geometry(container, button_size, gap);
 
-        let action_gap = action.trailing.left() - action.leading.right();
-        let application_gap = application.trailing.left() - application.leading.right();
-        assert!((action_gap - application_gap).abs() <= 0.01);
-        assert!((action_gap - gap).abs() <= 0.01);
-        assert!((action.trailing.right() - application.trailing.right()).abs() <= 0.01);
+        assert!((actions.trailing.left() - actions.leading.right() - gap).abs() <= 0.01);
+        assert!((actions.leading.width() - button_size.x).abs() <= 0.01);
+        assert!((actions.trailing.width() - button_size.x).abs() <= 0.01);
+        assert!((actions.leading.center().y - container.center().y).abs() <= 0.01);
+        assert!((actions.trailing.center().y - container.center().y).abs() <= 0.01);
+        assert!(
+            (actions.leading.left()
+                - container.left()
+                - (container.right() - actions.trailing.right()))
+            .abs()
+                <= 0.01
+        );
     }
 
     #[test]
-    fn picker_field_button_rows_use_exact_gap_and_right_edge_at_scaled_ui() {
+    fn application_control_rows_use_exact_gap_and_right_edge_at_scaled_ui() {
         let scale = 1.12;
         let content = egui::Rect::from_min_size(
             egui::pos2(20.0, 40.0),
@@ -1558,10 +1441,9 @@ mod tests {
         let gap = APPLICATION_LAYOUT_CONTROL_GAP * scale;
         let trailing_width = 104.0 * scale;
 
-        let refresh = control_pair_geometry(content, trailing_width, gap, content.height());
-        let use_executable = control_pair_geometry(content, trailing_width, gap, content.height());
+        let application = control_pair_geometry(content, trailing_width, gap, content.height());
 
-        for pair in [refresh, use_executable] {
+        for pair in [application] {
             assert!((pair.trailing.left() - pair.leading.right() - gap).abs() <= 0.01);
             assert!((pair.leading.left() - content.left()).abs() <= 0.01);
             assert!((pair.trailing.right() - content.right()).abs() <= 0.01);
@@ -1572,9 +1454,9 @@ mod tests {
     fn application_picker_fits_reference_viewport_without_touching_edges() {
         let geometry = application_picker_geometry(egui::vec2(700.0, 720.0), 1.0);
 
-        assert_eq!(geometry.window_size, egui::vec2(652.0, 520.0));
+        assert_eq!(geometry.window_size, egui::vec2(652.0, 460.0));
         assert_eq!(geometry.content_width, 592.0);
-        assert_eq!(geometry.list_height, 160.0);
+        assert_eq!(geometry.list_height, 280.0);
     }
 
     #[test]
@@ -1583,16 +1465,16 @@ mod tests {
 
         assert_eq!(geometry.window_size, egui::vec2(432.0, 432.0));
         assert_eq!(geometry.content_width, 372.0);
-        assert_eq!(geometry.list_height, 72.0);
+        assert_eq!(geometry.list_height, 262.0);
     }
 
     #[test]
     fn application_picker_caps_large_desktop_size() {
         let geometry = application_picker_geometry(egui::vec2(1_920.0, 1_080.0), 1.0);
 
-        assert_eq!(geometry.window_size, egui::vec2(680.0, 520.0));
+        assert_eq!(geometry.window_size, egui::vec2(680.0, 460.0));
         assert_eq!(geometry.content_width, 620.0);
-        assert_eq!(geometry.list_height, 160.0);
+        assert_eq!(geometry.list_height, 280.0);
     }
 
     #[test]
@@ -1632,7 +1514,7 @@ mod tests {
                     "Add application",
                     id,
                     &mut open,
-                    egui::vec2(652.0, 520.0),
+                    egui::vec2(652.0, 460.0),
                 )
                 .frame(
                     crate::ui_style::modal_window_frame(

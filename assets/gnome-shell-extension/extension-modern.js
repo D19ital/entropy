@@ -1,5 +1,6 @@
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
@@ -18,6 +19,9 @@ const INTERFACE_XML = `
       <arg type="s" name="wm_class" direction="out"/>
       <arg type="s" name="title" direction="out"/>
       <arg type="u" name="pid" direction="out"/>
+    </method>
+    <method name="GetOpenWindows">
+      <arg type="a(sssu)" name="windows" direction="out"/>
     </method>
     <signal name="ActiveWindowChanged">
       <arg type="b" name="focused"/>
@@ -130,7 +134,34 @@ export default class EntropyForegroundExtension extends Extension {
         ];
     }
 
+    GetOpenWindows() {
+        const allowedTypes = new Set([
+            Meta.WindowType.NORMAL,
+            Meta.WindowType.DIALOG,
+            Meta.WindowType.MODAL_DIALOG,
+            Meta.WindowType.UTILITY,
+        ]);
+        const seen = new Set();
+        const windows = [];
+        for (const actor of global.get_window_actors()) {
+            const window = actor.meta_window;
+            if (!window || window.is_skip_taskbar() || !allowedTypes.has(window.get_window_type()))
+                continue;
+            const app = this._tracker?.get_window_app(window);
+            const appId = app?.get_id() ?? '';
+            const wmClass = window.get_wm_class() ?? window.get_wm_class_instance() ?? '';
+            const title = window.get_title() ?? '';
+            const pid = Math.max(0, window.get_pid());
+            const key = `${appId}\u0000${wmClass}\u0000${pid}`;
+            if ((!appId && !wmClass && !pid) || seen.has(key))
+                continue;
+            seen.add(key);
+            windows.push([appId, wmClass, title, pid]);
+        }
+        return windows;
+    }
+
     GetProtocolVersion() {
-        return 3;
+        return 4;
     }
 }

@@ -75,6 +75,8 @@ struct DiscoveryState {
     force_refresh: bool,
 }
 
+const APPLICATION_RESCAN_INTERVAL: Duration = Duration::from_secs(1);
+
 static DISCOVERY: OnceLock<Mutex<DiscoveryState>> = OnceLock::new();
 static FOREGROUND_MONITOR: OnceLock<Mutex<ForegroundStatus>> = OnceLock::new();
 static FOREGROUND_MONITOR_STARTED: OnceLock<()> = OnceLock::new();
@@ -207,9 +209,9 @@ pub(crate) fn application_discovery_snapshot() -> ApplicationDiscoverySnapshot {
     if let Some(receiver) = state.receiver.take() {
         match receiver.try_recv() {
             Ok(mut available) => {
-                merge_applications(&mut available, state.available.clone());
+                available.retain(platform_application_is_user_facing);
                 state.available = available;
-                state.next_scan = Instant::now() + Duration::from_secs(30);
+                state.next_scan = Instant::now() + APPLICATION_RESCAN_INTERVAL;
             }
             Err(mpsc::TryRecvError::Empty) => state.receiver = Some(receiver),
             Err(mpsc::TryRecvError::Disconnected) => {
@@ -234,15 +236,80 @@ pub(crate) fn application_discovery_snapshot() -> ApplicationDiscoverySnapshot {
     }
     let mut status = foreground_monitor_snapshot();
     if let Some(mut application) = status.focused().cloned() {
+        enrich_application_from_platform_catalog(&mut application);
         enrich_application_from_catalog(&mut application, &state.available);
         status = status.with_focused(application.clone());
-        merge_applications(&mut state.available, [application]);
+        if platform_application_is_user_facing(&application) {
+            merge_applications(&mut state.available, [application]);
+        }
     }
     ApplicationDiscoverySnapshot {
         foreground: status.focused().cloned(),
         foreground_status: status,
         available: state.available.clone(),
     }
+}
+
+#[cfg(target_os = "linux")]
+fn enrich_application_from_platform_catalog(application: &mut DetectedApplication) {
+    if let Some(catalog) = LINUX_APPLICATION_CATALOG.get() {
+        enrich_application_from_catalog(application, &catalog.visible);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn enrich_application_from_platform_catalog(_application: &mut DetectedApplication) {}
+
+pub(crate) fn running_application_choices(
+    applications: &[DetectedApplication],
+) -> Vec<DetectedApplication> {
+    let mut choices = Vec::<DetectedApplication>::new();
+    for application in applications {
+        if application.executable.trim().is_empty() {
+            continue;
+        }
+        let mut application = application.clone();
+        application.window_title.clear();
+        if let Some(existing) = choices.iter_mut().find(|existing| {
+            crate::application_layouts::application_identities_match(
+                std::iter::once(existing.executable.as_str())
+                    .chain(existing.identities.iter().map(String::as_str)),
+                std::iter::once(application.executable.as_str())
+                    .chain(application.identities.iter().map(String::as_str)),
+            )
+        }) {
+            if existing.display_name.trim().is_empty()
+                || existing.display_name == existing.executable
+            {
+                existing.display_name = application.display_name;
+            }
+            existing.identities = crate::application_layouts::normalized_identity_values(
+                std::iter::once(existing.executable.as_str())
+                    .chain(existing.identities.iter().map(String::as_str))
+                    .chain(std::iter::once(application.executable.as_str()))
+                    .chain(application.identities.iter().map(String::as_str)),
+            );
+        } else {
+            choices.push(application);
+        }
+    }
+    choices.sort_by_cached_key(|application| {
+        (
+            application.display_name.to_ascii_lowercase(),
+            application.executable.to_ascii_lowercase(),
+        )
+    });
+    choices
+}
+
+#[cfg(target_os = "linux")]
+fn platform_application_is_user_facing(application: &DetectedApplication) -> bool {
+    linux_application_is_user_facing_with_catalog(application, linux_application_catalog())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn platform_application_is_user_facing(_application: &DetectedApplication) -> bool {
+    true
 }
 
 pub(crate) fn refresh_application_discovery() {
@@ -501,7 +568,7 @@ const GNOME_EXTENSION_PATH: &str = "/org/ergohaven/Entropy/Foreground1";
 #[cfg(target_os = "linux")]
 const GNOME_EXTENSION_INTERFACE: &str = "org.ergohaven.Entropy.Foreground1";
 #[cfg(target_os = "linux")]
-const GNOME_EXTENSION_PROTOCOL_VERSION: u32 = 3;
+const GNOME_EXTENSION_PROTOCOL_VERSION: u32 = 4;
 #[cfg(target_os = "linux")]
 static GNOME_SHELL_CONNECTION: OnceLock<zbus::blocking::Connection> = OnceLock::new();
 
@@ -659,6 +726,43 @@ fn gnome_shell_application(
             .chain([app_id.as_str(), wm_class.as_str()]),
     );
     ForegroundState::Focused(application.clone())
+}
+
+#[cfg(target_os = "linux")]
+fn linux_gnome_wayland_applications() -> Vec<DetectedApplication> {
+    let Ok(connection) = zbus::blocking::Connection::session() else {
+        return Vec::new();
+    };
+    let Ok(proxy) = zbus::blocking::Proxy::new(
+        &connection,
+        GNOME_EXTENSION_BUS,
+        GNOME_EXTENSION_PATH,
+        GNOME_EXTENSION_INTERFACE,
+    ) else {
+        return Vec::new();
+    };
+    let Ok(windows) = proxy.call::<_, _, Vec<(String, String, String, u32)>>("GetOpenWindows", &())
+    else {
+        return Vec::new();
+    };
+    gnome_shell_applications_from_payload(windows)
+}
+
+#[cfg(target_os = "linux")]
+fn gnome_shell_applications_from_payload(
+    windows: Vec<(String, String, String, u32)>,
+) -> Vec<DetectedApplication> {
+    windows
+        .into_iter()
+        .filter_map(|(app_id, wm_class, title, pid)| {
+            match gnome_shell_application(app_id, wm_class, title, pid) {
+                ForegroundState::Focused(application) => Some(application),
+                ForegroundState::UnidentifiedWindow(_)
+                | ForegroundState::NoFocusedWindow
+                | ForegroundState::BackendUnavailable(_) => None,
+            }
+        })
+        .collect()
 }
 
 #[cfg(target_os = "linux")]
@@ -945,7 +1049,14 @@ fn parse_gsettings_string_array(value: &str) -> Vec<String> {
 
 #[cfg(target_os = "linux")]
 fn platform_available_apps() -> Vec<DetectedApplication> {
-    let mut applications = linux_installed_apps();
+    // Only applications with visible windows belong in the picker. The
+    // installed desktop catalog is kept as metadata so runtime process IDs
+    // still receive friendly names and stable identities without exposing
+    // control panels and helper launchers to the user.
+    let mut applications = Vec::new();
+    if linux_foreground_backend() == LinuxForegroundBackend::GnomeWayland {
+        merge_applications(&mut applications, linux_gnome_wayland_applications());
+    }
     if let Some(output) = command_stdout("hyprctl", &["-j", "clients"]) {
         merge_applications(&mut applications, parse_hyprland_clients(&output));
     }
@@ -956,21 +1067,55 @@ fn platform_available_apps() -> Vec<DetectedApplication> {
         merge_applications(&mut applications, parse_wmctrl_apps(&output));
     }
     merge_applications(&mut applications, linux_x11_applications());
+    let catalog = linux_installed_apps();
+    for application in &mut applications {
+        enrich_application_from_catalog(application, &catalog);
+    }
     applications
 }
 
 #[cfg(target_os = "linux")]
-static LINUX_INSTALLED_APPLICATIONS: OnceLock<Vec<DetectedApplication>> = OnceLock::new();
-
-#[cfg(target_os = "linux")]
-fn linux_installed_apps() -> Vec<DetectedApplication> {
-    LINUX_INSTALLED_APPLICATIONS
-        .get_or_init(scan_linux_desktop_entries)
-        .clone()
+#[derive(Default)]
+struct LinuxApplicationCatalog {
+    visible: Vec<DetectedApplication>,
+    hidden: Vec<DetectedApplication>,
 }
 
 #[cfg(target_os = "linux")]
-fn scan_linux_desktop_entries() -> Vec<DetectedApplication> {
+static LINUX_APPLICATION_CATALOG: OnceLock<LinuxApplicationCatalog> = OnceLock::new();
+
+#[cfg(target_os = "linux")]
+fn linux_application_catalog() -> &'static LinuxApplicationCatalog {
+    LINUX_APPLICATION_CATALOG.get_or_init(scan_linux_desktop_entries)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_installed_apps() -> Vec<DetectedApplication> {
+    linux_application_catalog().visible.clone()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_application_is_user_facing_with_catalog(
+    application: &DetectedApplication,
+    catalog: &LinuxApplicationCatalog,
+) -> bool {
+    let matches = |candidate: &DetectedApplication| {
+        crate::application_layouts::application_identities_match(
+            std::iter::once(application.executable.as_str())
+                .chain(application.identities.iter().map(String::as_str)),
+            std::iter::once(candidate.executable.as_str())
+                .chain(candidate.identities.iter().map(String::as_str)),
+        )
+    };
+
+    // A visible launcher wins over a hidden helper entry from the same package.
+    // Unknown applications remain visible so portable binaries and AppImages
+    // with a real window are not accidentally discarded.
+    catalog.visible.iter().any(matches) || !catalog.hidden.iter().any(matches)
+}
+
+#[cfg(target_os = "linux")]
+fn scan_linux_desktop_entries() -> LinuxApplicationCatalog {
     let mut data_roots = Vec::<PathBuf>::new();
     if let Some(data_home) = std::env::var_os("XDG_DATA_HOME") {
         data_roots.push(PathBuf::from(data_home));
@@ -981,21 +1126,19 @@ fn scan_linux_desktop_entries() -> Vec<DetectedApplication> {
         std::env::var_os("XDG_DATA_DIRS").unwrap_or_else(|| "/usr/local/share:/usr/share".into());
     data_roots.extend(std::env::split_paths(&system_roots));
 
-    let mut applications = Vec::new();
+    let mut catalog = LinuxApplicationCatalog::default();
     for root in data_roots {
-        collect_desktop_entries(&root.join("applications"), 0, &mut applications);
+        collect_desktop_entries(&root.join("applications"), 0, &mut catalog);
     }
-    let mut merged = Vec::new();
-    merge_applications(&mut merged, applications);
-    merged
+    let mut visible = Vec::new();
+    merge_applications(&mut visible, catalog.visible);
+    let mut hidden = Vec::new();
+    merge_applications(&mut hidden, catalog.hidden);
+    LinuxApplicationCatalog { visible, hidden }
 }
 
 #[cfg(target_os = "linux")]
-fn collect_desktop_entries(
-    directory: &Path,
-    depth: usize,
-    applications: &mut Vec<DetectedApplication>,
-) {
+fn collect_desktop_entries(directory: &Path, depth: usize, catalog: &mut LinuxApplicationCatalog) {
     if depth > 3 {
         return;
     }
@@ -1005,12 +1148,18 @@ fn collect_desktop_entries(
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_desktop_entries(&path, depth + 1, applications);
+            collect_desktop_entries(&path, depth + 1, catalog);
         } else if path.extension().and_then(|value| value.to_str()) == Some("desktop") {
             if let Ok(contents) = std::fs::read_to_string(&path) {
                 let desktop_id = path.file_stem().and_then(|value| value.to_str());
-                if let Some(application) = parse_desktop_entry_with_id(&contents, desktop_id) {
-                    applications.push(application);
+                if let Some((application, visible)) =
+                    parse_desktop_entry_metadata_with_id(&contents, desktop_id)
+                {
+                    if visible {
+                        catalog.visible.push(application);
+                    } else {
+                        catalog.hidden.push(application);
+                    }
                 }
             }
         }
@@ -1027,6 +1176,15 @@ fn parse_desktop_entry_with_id(
     contents: &str,
     desktop_id: Option<&str>,
 ) -> Option<DetectedApplication> {
+    parse_desktop_entry_metadata_with_id(contents, desktop_id)
+        .and_then(|(application, visible)| visible.then_some(application))
+}
+
+#[cfg(target_os = "linux")]
+fn parse_desktop_entry_metadata_with_id(
+    contents: &str,
+    desktop_id: Option<&str>,
+) -> Option<(DetectedApplication, bool)> {
     let mut in_desktop_entry = false;
     let mut name = String::new();
     let mut executable = String::new();
@@ -1064,7 +1222,7 @@ fn parse_desktop_entry_with_id(
         }
     }
 
-    if hidden || no_display || application_type != "Application" || name.trim().is_empty() {
+    if application_type != "Application" || name.trim().is_empty() {
         return None;
     }
     let primary_executable = [
@@ -1087,12 +1245,15 @@ fn parse_desktop_entry_with_id(
         .flatten()
         .filter(|value| !value.trim().is_empty()),
     );
-    Some(DetectedApplication {
-        executable: primary_executable,
-        identities,
-        display_name: name,
-        window_title: String::new(),
-    })
+    Some((
+        DetectedApplication {
+            executable: primary_executable,
+            identities,
+            display_name: name,
+            window_title: String::new(),
+        },
+        !hidden && !no_display,
+    ))
 }
 
 #[cfg(target_os = "linux")]
@@ -1177,6 +1338,13 @@ struct LinuxX11Applications {
     xlib: x11_dl::xlib::Xlib,
     display: *mut x11_dl::xlib::Display,
 }
+
+#[cfg(target_os = "linux")]
+const LINUX_X11_USER_WINDOW_TYPES: &[&str] = &[
+    "_NET_WM_WINDOW_TYPE_NORMAL",
+    "_NET_WM_WINDOW_TYPE_DIALOG",
+    "_NET_WM_WINDOW_TYPE_UTILITY",
+];
 
 #[cfg(target_os = "linux")]
 static LINUX_X11_DISCOVERY_DISPLAYS: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
@@ -1340,6 +1508,19 @@ impl LinuxX11Applications {
         }
     }
 
+    fn window_is_user_facing(&self, window: x11_dl::xlib::Window) -> bool {
+        let window_types = self.property_u32(window, "_NET_WM_WINDOW_TYPE");
+        if window_types.is_empty() {
+            // Older applications may not publish EWMH type metadata. They are
+            // still valid ICCCM clients, so keep them instead of hiding them.
+            return true;
+        }
+        LINUX_X11_USER_WINDOW_TYPES
+            .iter()
+            .filter_map(|name| self.atom(name))
+            .any(|allowed| window_types.contains(&(allowed as u32)))
+    }
+
     fn child_windows(&self, window: x11_dl::xlib::Window) -> Vec<x11_dl::xlib::Window> {
         unsafe {
             let mut returned_root = 0;
@@ -1451,7 +1632,7 @@ impl LinuxX11Applications {
     }
 
     fn application_for_window(&self, window: x11_dl::xlib::Window) -> Option<DetectedApplication> {
-        if window == 0 {
+        if window == 0 || !self.window_is_user_facing(window) {
             return None;
         }
         let title = self
@@ -1990,6 +2171,13 @@ fn macos_detected_application(
         if application.is_null() {
             return None;
         }
+        // NSApplicationActivationPolicyRegular (0) identifies normal GUI
+        // applications. Accessory agents and prohibited/background processes
+        // must not appear in the application-layout picker.
+        let activation_policy: isize = msg_send![application, activationPolicy];
+        if activation_policy != 0 {
+            return None;
+        }
         let name: *mut objc::runtime::Object = msg_send![application, localizedName];
         let bundle: *mut objc::runtime::Object = msg_send![application, bundleIdentifier];
         let url: *mut objc::runtime::Object = msg_send![application, executableURL];
@@ -2216,11 +2404,118 @@ mod tests {
     }
 
     #[test]
+    fn running_choices_merge_windows_and_hide_window_titles() {
+        let choices = running_application_choices(&[
+            DetectedApplication {
+                executable: "telegram-desktop".to_owned(),
+                identities: vec!["org.telegram.desktop".to_owned()],
+                display_name: "Telegram".to_owned(),
+                window_title: "General".to_owned(),
+            },
+            DetectedApplication {
+                executable: "org.telegram.desktop".to_owned(),
+                identities: vec!["telegram-desktop".to_owned()],
+                display_name: "Telegram".to_owned(),
+                window_title: "Ergohaven".to_owned(),
+            },
+            DetectedApplication {
+                executable: "blender".to_owned(),
+                identities: vec!["blender".to_owned()],
+                display_name: "Blender".to_owned(),
+                window_title: "Scene".to_owned(),
+            },
+        ]);
+
+        assert_eq!(choices.len(), 2);
+        assert_eq!(choices[0].display_name, "Blender");
+        assert_eq!(choices[1].display_name, "Telegram");
+        assert!(choices
+            .iter()
+            .all(|application| application.window_title.is_empty()));
+    }
+
+    #[test]
+    fn running_choices_include_entropy_itself() {
+        let current = "Entropy-linux-x86_64".to_owned();
+        let choices = running_application_choices(&[DetectedApplication {
+            executable: current.clone(),
+            identities: vec![current],
+            display_name: "Entropy".to_owned(),
+            window_title: "Entropy".to_owned(),
+        }]);
+
+        assert_eq!(choices.len(), 1);
+        assert_eq!(choices[0].display_name, "Entropy");
+        assert!(choices[0].window_title.is_empty());
+    }
+
+    #[test]
     fn skips_hidden_desktop_application() {
         assert!(parse_desktop_entry(
             "[Desktop Entry]\nType=Application\nName=Hidden helper\nExec=helper\nNoDisplay=true\n",
         )
         .is_none());
+    }
+
+    #[test]
+    fn linux_picker_hides_helpers_but_keeps_visible_and_portable_apps() {
+        let helper = parse_desktop_entry_metadata_with_id(
+            "[Desktop Entry]\nType=Application\nName=Background helper\nExec=example-app\nNoDisplay=true\n",
+            Some("com.example.App.Helper.desktop"),
+        )
+        .expect("hidden helper metadata must still be classified")
+        .0;
+        let visible = parse_desktop_entry_metadata_with_id(
+            "[Desktop Entry]\nType=Application\nName=Example App\nExec=example-app\nStartupWMClass=ExampleApp\n",
+            Some("com.example.App.desktop"),
+        )
+        .expect("visible launcher metadata must be classified")
+        .0;
+        let running = DetectedApplication {
+            executable: "example-app".to_owned(),
+            identities: vec!["ExampleApp".to_owned()],
+            display_name: "Example App".to_owned(),
+            window_title: "Document".to_owned(),
+        };
+
+        assert!(!linux_application_is_user_facing_with_catalog(
+            &running,
+            &LinuxApplicationCatalog {
+                visible: Vec::new(),
+                hidden: vec![helper.clone()],
+            },
+        ));
+        assert!(linux_application_is_user_facing_with_catalog(
+            &running,
+            &LinuxApplicationCatalog {
+                visible: vec![visible],
+                hidden: vec![helper],
+            },
+        ));
+        assert!(linux_application_is_user_facing_with_catalog(
+            &DetectedApplication {
+                executable: "Entropy-linux-x86_64".to_owned(),
+                identities: vec!["Entropy-linux-x86_64".to_owned()],
+                display_name: "Entropy".to_owned(),
+                window_title: "Entropy".to_owned(),
+            },
+            &LinuxApplicationCatalog::default(),
+        ));
+    }
+
+    #[test]
+    fn x11_picker_accepts_app_windows_not_shell_surfaces() {
+        assert!(LINUX_X11_USER_WINDOW_TYPES.contains(&"_NET_WM_WINDOW_TYPE_NORMAL"));
+        assert!(LINUX_X11_USER_WINDOW_TYPES.contains(&"_NET_WM_WINDOW_TYPE_DIALOG"));
+        for system_surface in [
+            "_NET_WM_WINDOW_TYPE_DESKTOP",
+            "_NET_WM_WINDOW_TYPE_DOCK",
+            "_NET_WM_WINDOW_TYPE_MENU",
+            "_NET_WM_WINDOW_TYPE_NOTIFICATION",
+            "_NET_WM_WINDOW_TYPE_TOOLTIP",
+        ] {
+            assert!(!LINUX_X11_USER_WINDOW_TYPES.contains(&system_surface));
+        }
     }
 
     #[test]
@@ -2390,6 +2685,32 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn gnome_shell_open_windows_include_apps_that_are_not_focused() {
+        let applications = gnome_shell_applications_from_payload(vec![
+            (
+                "org.telegram.desktop".to_owned(),
+                "TelegramDesktop".to_owned(),
+                "Telegram".to_owned(),
+                0,
+            ),
+            (
+                "org.gnome.Nautilus".to_owned(),
+                "org.gnome.Nautilus".to_owned(),
+                "Downloads".to_owned(),
+                0,
+            ),
+        ]);
+        assert_eq!(applications.len(), 2);
+        assert!(applications.iter().any(|application| {
+            crate::application_layouts::application_identities_match(
+                application.identities.iter().map(String::as_str),
+                ["org.telegram.desktop", "TelegramDesktop"],
+            )
+        }));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn bundled_gnome_extensions_use_shell_focus_not_accessibility() {
         for source in [
             include_str!("../assets/gnome-shell-extension/extension-modern.js"),
@@ -2398,12 +2719,14 @@ mod tests {
             assert!(source.contains("global.display.focus_window"));
             assert!(source.contains("GetActiveWindow"));
             assert!(source.contains("GetProtocolVersion"));
+            assert!(source.contains("GetOpenWindows"));
+            assert!(source.contains("global.get_window_actors()"));
             assert!(source.contains("ActiveWindowChanged"));
             assert!(source.contains("notify::focus-window"));
             assert!(source.contains("notify::focus-app"));
             assert!(source.contains("GLib.idle_add"));
             assert!(source.contains("notify::title"));
-            assert!(source.contains("return 3"));
+            assert!(source.contains("return 4"));
             assert!(!source.to_ascii_lowercase().contains("at-spi"));
             assert!(!source.to_ascii_lowercase().contains("accessible"));
         }

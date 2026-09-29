@@ -115,10 +115,10 @@ impl EntropyApp {
             application_picker_assign_existing: false,
             application_picker_target_layout_id: None,
             application_picker_search: String::new(),
-            application_manual_executable: String::new(),
             application_picker_selected: None,
-            application_picker_layout_name: String::new(),
-            application_picker_title_contains: String::new(),
+            application_layout_rename_focus_requested: false,
+            application_layout_rename_target_id: None,
+            application_layout_rename_value: String::new(),
             pending_device_connect: None,
             firmware: FirmwareProtocol::Vial,
             #[cfg(not(target_arch = "wasm32"))]
