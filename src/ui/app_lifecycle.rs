@@ -1368,6 +1368,32 @@ impl eframe::App for EntropyApp {
 
             if self.selected_device.is_none() && !reconnecting_with_layout {
                 let rect = ui.max_rect();
+                if self.settings_tab == SettingsTab::ApplicationLayouts
+                    && self.offline_application_layouts_available()
+                {
+                    self.draw_application_layouts_settings_page(ui, rect);
+                    let back_rect = egui::Rect::from_min_size(
+                        egui::pos2(rect.left() + 18.0, rect.top() + 18.0),
+                        egui::vec2(128.0, 32.0),
+                    );
+                    crate::ui_style::allocate_ui_at_rect(ui, back_rect, |ui| {
+                        if crate::ui_style::modern_button(
+                            ui,
+                            super::application_layout_runtime::app_layout_text(
+                                self.app_settings.language,
+                                "К подключению",
+                                "Back to connection",
+                            ),
+                            back_rect.size(),
+                            true,
+                        )
+                        .clicked()
+                        {
+                            self.settings_tab = SettingsTab::AppSettings;
+                        }
+                    });
+                    return;
+                }
                 #[cfg(target_os = "linux")]
                 if !super::app_settings_ui::linux_vial_udev_rules_installed()
                     && !self
@@ -1468,6 +1494,24 @@ impl eframe::App for EntropyApp {
                             .size(13.0)
                             .color(app_muted_text(self.dark_mode)),
                         );
+                        if self.offline_application_layouts_available() {
+                            ui.add_space(14.0);
+                            if crate::ui_style::modern_button(
+                                ui,
+                                super::application_layout_runtime::app_layout_text(
+                                    self.app_settings.language,
+                                    "Раскладки приложений",
+                                    "Application layouts",
+                                ),
+                                egui::vec2(190.0, 34.0),
+                                true,
+                            )
+                            .clicked()
+                            {
+                                self.main_menu_tab = MainMenuTab::Settings;
+                                self.settings_tab = SettingsTab::ApplicationLayouts;
+                            }
+                        }
                     });
                 });
                 return;

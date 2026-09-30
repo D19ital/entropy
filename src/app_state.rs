@@ -42,6 +42,13 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) application_layouts:
         std::collections::BTreeMap<String, crate::application_layouts::DeviceApplicationLayouts>,
+    /// Last Macropad application-layout profile opened by the user. Keeping
+    /// this small identity lets Entropy continue resolving foreground apps and
+    /// editing saved profiles while the USB device is temporarily offline.
+    #[serde(default)]
+    pub(crate) last_application_layout_device_key: Option<String>,
+    #[serde(default)]
+    pub(crate) last_application_layout_device_name: Option<String>,
     #[serde(default)]
     pub(crate) minimize_to_tray_on_close: bool,
     #[serde(default)]
@@ -196,6 +203,8 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             application_layouts: std::collections::BTreeMap::new(),
+            last_application_layout_device_key: None,
+            last_application_layout_device_name: None,
             minimize_to_tray_on_close: false,
             close_to_tray_behavior: CloseToTrayBehavior::Ask,
             launch_at_startup: false,
@@ -5367,6 +5376,10 @@ pub struct EntropyApp {
     pub(crate) editing_layer: Option<usize>, // layer being renamed
     pub(crate) editing_layer_text: String,
     pub(crate) editing_layer_focus_requested: bool,
+    /// Stable application-layout id captured when layer-name editing starts.
+    /// Foreground application changes must never redirect the draft to the
+    /// newly selected profile.
+    pub(crate) editing_layer_layout_id: Option<String>,
     /// Current connected device name (for per-device layer names)
     pub(crate) current_device_name: String,
     /// Stable Vial keyboard id for the current firmware definition, when available.

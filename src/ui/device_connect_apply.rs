@@ -1189,6 +1189,7 @@ impl EntropyApp {
                 self.firmware = r.layout.firmware;
                 self.current_device_name = r.device_name.clone();
                 self.current_keyboard_id = Some(r.keyboard_id);
+                self.remember_connected_application_layout_device();
                 match &r.vial_unlock_status {
                     Some((unlocked, keys)) => {
                         self.vial_unlocked = Some(*unlocked);
@@ -1423,6 +1424,11 @@ impl EntropyApp {
                 {
                     self.restore_entropy_display_preset_after_connect();
                     self.sync_qmk_hid_host_bridges();
+                    // USB reconnect can restore the same logical profile while
+                    // firmware has lost its volatile host-side layout. Publish
+                    // the current snapshot and explicitly request a full resend.
+                    self.update_application_layout_runtime();
+                    self.force_current_application_layout_resend();
                 }
 
                 log::info!(

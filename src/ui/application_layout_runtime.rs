@@ -5,20 +5,61 @@ fn device_supports_application_layouts(device: &crate::device::Device) -> bool {
 }
 
 impl EntropyApp {
-    pub(super) fn application_layouts_supported(&self) -> bool {
+    fn connected_application_layout_device_key(&self) -> Option<String> {
         self.selected_device
             .and_then(|index| self.device_manager.devices().get(index))
-            .is_some_and(device_supports_application_layouts)
-    }
-
-    pub(super) fn application_layout_device_key(&self) -> Option<String> {
-        if !self.application_layouts_supported() {
-            return None;
-        }
+            .filter(|device| device_supports_application_layouts(device))?;
         Some(match self.current_keyboard_id {
             Some(id) => format!("vial-{id:016x}"),
             None => device_id_slug(&self.current_device_name),
         })
+    }
+
+    pub(super) fn application_layouts_supported(&self) -> bool {
+        self.connected_application_layout_device_key().is_some()
+            || (self.selected_device.is_none()
+                && self
+                    .app_settings
+                    .last_application_layout_device_key
+                    .as_ref()
+                    .is_some_and(|key| self.app_settings.application_layouts.contains_key(key)))
+    }
+
+    pub(super) fn application_layout_device_key(&self) -> Option<String> {
+        if let Some(key) = self.connected_application_layout_device_key() {
+            return Some(key);
+        }
+        self.selected_device
+            .is_none()
+            .then(|| self.app_settings.last_application_layout_device_key.clone())?
+    }
+
+    pub(super) fn remember_connected_application_layout_device(&mut self) {
+        let Some(key) = self.connected_application_layout_device_key() else {
+            return;
+        };
+        let name = self.current_device_name.trim().to_owned();
+        let name = (!name.is_empty()).then_some(name);
+        let changed = self
+            .app_settings
+            .last_application_layout_device_key
+            .as_deref()
+            != Some(key.as_str())
+            || self.app_settings.last_application_layout_device_name != name;
+        if changed {
+            self.app_settings.last_application_layout_device_key = Some(key);
+            self.app_settings.last_application_layout_device_name = name;
+            save_app_settings(&self.app_settings);
+        }
+    }
+
+    pub(super) fn offline_application_layouts_available(&self) -> bool {
+        self.selected_device.is_none()
+            && self
+                .app_settings
+                .last_application_layout_device_key
+                .as_ref()
+                .is_some_and(|key| self.app_settings.application_layouts.contains_key(key))
     }
 
     pub(super) fn application_layout_settings(
@@ -63,6 +104,10 @@ impl EntropyApp {
     }
 
     pub(super) fn activate_application_layout(&mut self, id: &str) -> bool {
+        // Finish drafts against the profile where editing started before the
+        // editor selection changes. Otherwise an application-focus transition
+        // can redirect a layer-name draft to the newly selected profile.
+        self.commit_pending_application_layout_edits();
         let Some(device_key) = self.application_layout_device_key() else {
             return false;
         };
@@ -107,15 +152,38 @@ impl EntropyApp {
             .unwrap_or_else(crate::application_layouts::default_layer_names)
     }
 
-    pub(super) fn rename_application_layout_layer(&mut self, layer: usize, name: String) -> bool {
+    pub(super) fn rename_application_layout_layer(
+        &mut self,
+        layout_id: &str,
+        layer: usize,
+        name: String,
+    ) -> bool {
         let changed = self
             .application_layout_settings_mut()
-            .and_then(|settings| settings.editor_layout_mut())
+            .and_then(|settings| settings.layouts.get_mut(layout_id))
             .is_some_and(|layout| layout.set_layer_name(layer, name));
         if changed {
             save_app_settings(&self.app_settings);
         }
         changed
+    }
+
+    pub(super) fn commit_pending_application_layout_edits(&mut self) {
+        self.commit_pending_application_layout_rename();
+
+        let (Some(layer), Some(layout_id)) =
+            (self.editing_layer, self.editing_layer_layout_id.clone())
+        else {
+            return;
+        };
+        let name = self.editing_layer_text.trim().to_owned();
+        if !name.is_empty() {
+            self.rename_application_layout_layer(&layout_id, layer, name);
+        }
+        self.editing_layer = None;
+        self.editing_layer_text.clear();
+        self.editing_layer_focus_requested = false;
+        self.editing_layer_layout_id = None;
     }
 
     fn application_control_for_key(layout: &KeyboardLayout, key_index: usize) -> Option<usize> {
@@ -301,6 +369,11 @@ impl EntropyApp {
     pub(super) fn update_application_layout_runtime(&mut self) {
         let discovered = crate::app_discovery::application_discovery_snapshot();
         let foreground_changed = self.application_layout_foreground != discovered.foreground;
+        if foreground_changed {
+            // Commit while editor_layout_id still points at the source profile.
+            // The runtime may select another profile later in this update.
+            self.commit_pending_application_layout_edits();
+        }
         self.application_layout_foreground = discovered.foreground.clone();
         self.application_discovery = discovered;
 
@@ -388,15 +461,39 @@ impl EntropyApp {
             save_app_settings(&self.app_settings);
         }
 
-        if let Some(path) = self
+        self.publish_application_layout_snapshot(snapshot, false);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn publish_application_layout_snapshot(
+        &self,
+        snapshot: crate::application_layouts::ApplicationLayoutSnapshot,
+        force_resend: bool,
+    ) {
+        let Some(path) = self
             .selected_device
             .and_then(|index| self.device_manager.devices().get(index))
-            .map(|device| device.path.clone())
-        {
-            if let Some(bridge) = self.qmk_hid_hosts.get(&path) {
-                bridge.set_application_layout_snapshot(snapshot);
-            }
+            .map(|device| device.path.as_str())
+        else {
+            return;
+        };
+        let Some(bridge) = self.qmk_hid_hosts.get(path) else {
+            return;
+        };
+        bridge.set_application_layout_snapshot(snapshot);
+        if force_resend {
+            bridge.force_application_layout_resend();
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn force_current_application_layout_resend(&self) {
+        let snapshot = self
+            .application_layout_settings()
+            .and_then(|settings| settings.active_layout())
+            .map(crate::application_layouts::ApplicationLayoutSnapshot::from_layout)
+            .unwrap_or_else(crate::application_layouts::ApplicationLayoutSnapshot::inactive);
+        self.publish_application_layout_snapshot(snapshot, true);
     }
 }
 
@@ -545,6 +642,49 @@ mod tests {
         };
 
         assert!(device_supports_application_layouts(&device));
+    }
+
+    #[test]
+    fn saved_macropad_profiles_remain_available_while_device_is_offline() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        let key = "vial-0000000000000042".to_owned();
+        app.app_settings.application_layouts.insert(
+            key.clone(),
+            crate::application_layouts::DeviceApplicationLayouts::default(),
+        );
+        app.app_settings.last_application_layout_device_key = Some(key.clone());
+        app.app_settings.last_application_layout_device_name = Some("Macropad v3".to_owned());
+        app.selected_device = None;
+        app.current_keyboard_id = None;
+        app.current_device_name.clear();
+
+        assert!(app.application_layouts_supported());
+        assert!(app.offline_application_layouts_available());
+        assert_eq!(app.application_layout_device_key(), Some(key));
+        assert!(app.application_layout_settings().is_some());
+    }
+
+    #[test]
+    fn offline_macropad_profiles_do_not_override_an_incompatible_selected_device() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        let key = "vial-0000000000000042".to_owned();
+        app.app_settings.application_layouts.insert(
+            key.clone(),
+            crate::application_layouts::DeviceApplicationLayouts::default(),
+        );
+        app.app_settings.last_application_layout_device_key = Some(key);
+        let mut incompatible = m4cr0pad_v3_device();
+        incompatible.product_id = 0x9999;
+        app.device_manager.replace_devices(vec![incompatible]);
+        app.selected_device = Some(0);
+
+        assert!(!app.application_layouts_supported());
+        assert!(!app.offline_application_layouts_available());
+        assert!(app.application_layout_device_key().is_none());
     }
 
     #[test]
@@ -752,6 +892,56 @@ mod tests {
             app.application_layout_manual_override,
             Some((device_key, app.application_discovery.foreground.clone()))
         );
+    }
+
+    #[test]
+    fn profile_change_commits_name_drafts_to_the_profile_where_editing_started() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        app.device_manager
+            .replace_devices(vec![m4cr0pad_v3_device()]);
+        app.selected_device = Some(0);
+        app.current_device_name = "M4CR0Pad v3".to_owned();
+
+        let device_key = app.application_layout_device_key().unwrap();
+        let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+        let telegram =
+            settings.create_for_application(&crate::application_layouts::DetectedApplication {
+                executable: "telegram".to_owned(),
+                identities: vec!["org.telegram.desktop".to_owned()],
+                display_name: "Telegram".to_owned(),
+                window_title: String::new(),
+            });
+        let calculator =
+            settings.create_for_application(&crate::application_layouts::DetectedApplication {
+                executable: "calculator".to_owned(),
+                identities: vec!["org.gnome.Calculator".to_owned()],
+                display_name: "Calculator".to_owned(),
+                window_title: String::new(),
+            });
+        settings.editor_layout_id = telegram.clone();
+        settings.active_layout_id = telegram.clone();
+        app.app_settings
+            .application_layouts
+            .insert(device_key.clone(), settings);
+
+        app.application_layout_rename_target_id = Some(telegram.clone());
+        app.application_layout_rename_value = "Telegram Work".to_owned();
+        app.editing_layer = Some(3);
+        app.editing_layer_text = "Calls".to_owned();
+        app.editing_layer_layout_id = Some(telegram.clone());
+
+        assert!(app.activate_application_layout(&calculator));
+
+        let settings = &app.app_settings.application_layouts[&device_key];
+        assert_eq!(settings.layouts[&telegram].name, "Telegram Work");
+        assert_eq!(settings.layouts[&telegram].layer_names[3], "Calls");
+        assert_ne!(settings.layouts[&calculator].layer_names[3], "Calls");
+        assert_eq!(settings.editor_layout_id, calculator);
+        assert!(app.application_layout_rename_target_id.is_none());
+        assert!(app.editing_layer.is_none());
+        assert!(app.editing_layer_layout_id.is_none());
     }
 
     #[test]

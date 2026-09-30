@@ -274,6 +274,7 @@ impl EntropyApp {
             editing_layer: None,
             editing_layer_text: String::new(),
             editing_layer_focus_requested: false,
+            editing_layer_layout_id: None,
             current_device_name: String::new(),
             current_keyboard_id: None,
             current_encoder_visibility_id: String::new(),

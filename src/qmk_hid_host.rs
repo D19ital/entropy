@@ -2,7 +2,7 @@
 //! Sends the same Raw HID packet family as https://github.com/ergohaven/qmk-hid-host.
 
 use std::sync::{
-    atomic::{AtomicBool, AtomicU8, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
     Arc, Mutex, OnceLock,
 };
 use std::thread::{self, JoinHandle};
@@ -797,6 +797,7 @@ pub struct QmkHidHostBridge {
     send_shutdown_on_drop: Arc<AtomicBool>,
     layout_snapshot: Arc<AtomicU8>,
     application_layout_snapshot: Arc<Mutex<crate::application_layouts::ApplicationLayoutSnapshot>>,
+    application_layout_resend_generation: Arc<AtomicU64>,
 }
 
 impl QmkHidHostBridge {
@@ -820,6 +821,7 @@ impl QmkHidHostBridge {
             application_layout_snapshot: Arc::new(Mutex::new(
                 crate::application_layouts::ApplicationLayoutSnapshot::inactive(),
             )),
+            application_layout_resend_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -909,6 +911,8 @@ impl QmkHidHostBridge {
             crate::application_layouts::ApplicationLayoutSnapshot::inactive(),
         ));
         let worker_application_layout = application_layout_snapshot.clone();
+        let application_layout_resend_generation = Arc::new(AtomicU64::new(0));
+        let worker_application_layout_resend = application_layout_resend_generation.clone();
         let send_shutdown_on_drop = Arc::new(AtomicBool::new(true));
         let worker_shutdown = send_shutdown_on_drop.clone();
         let thread = thread::spawn(move || {
@@ -919,6 +923,7 @@ impl QmkHidHostBridge {
                 worker_control,
                 worker_layout,
                 worker_application_layout,
+                worker_application_layout_resend,
                 protocol,
                 worker_shutdown,
                 desktop,
@@ -935,6 +940,7 @@ impl QmkHidHostBridge {
             send_shutdown_on_drop,
             layout_snapshot,
             application_layout_snapshot,
+            application_layout_resend_generation,
         }
     }
 
@@ -950,6 +956,14 @@ impl QmkHidHostBridge {
 
     pub(crate) fn supports_application_layouts(&self) -> bool {
         self.device.is_m4cr0pad_v3()
+    }
+
+    /// Requests a complete transfer even if the logical profile is unchanged.
+    /// Reattached firmware has lost volatile host state and needs all packets,
+    /// not only the periodic keepalive.
+    pub(crate) fn force_application_layout_resend(&self) {
+        self.application_layout_resend_generation
+            .fetch_add(1, Ordering::SeqCst);
     }
 
     pub fn layout_label(&self) -> Option<&'static str> {
@@ -1033,6 +1047,7 @@ fn run_bridge(
     control: Arc<BridgeTransportControl>,
     layout_snapshot: Arc<AtomicU8>,
     application_layout_snapshot: Arc<Mutex<crate::application_layouts::ApplicationLayoutSnapshot>>,
+    application_layout_resend_generation: Arc<AtomicU64>,
     mut protocol: HostProtocol,
     send_shutdown: Arc<AtomicBool>,
     desktop: HostDataService,
@@ -1058,6 +1073,8 @@ fn run_bridge(
     let mut last_media_full_send = Instant::now() - Duration::from_secs(60);
     let mut last_layout_full_send = Instant::now();
     let mut last_application_layout = None;
+    let mut last_application_layout_resend_generation =
+        application_layout_resend_generation.load(Ordering::SeqCst);
     let mut last_application_layout_send = Instant::now() - Duration::from_secs(60);
     let mut desktop_subscription = None;
 
@@ -1155,6 +1172,11 @@ fn run_bridge(
         let mut write_failed = false;
 
         if application_layouts_enabled {
+            let resend_generation = application_layout_resend_generation.load(Ordering::SeqCst);
+            if resend_generation != last_application_layout_resend_generation {
+                last_application_layout = None;
+                last_application_layout_resend_generation = resend_generation;
+            }
             let application_layout = application_layout_snapshot
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
@@ -1733,6 +1755,41 @@ fn split_media_line(line: &str) -> Option<(String, String)> {
 #[cfg(all(test, not(target_os = "windows")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forced_application_layout_resend_advances_transport_generation() {
+        let bridge = QmkHidHostBridge::test_inert(
+            crate::device::Device {
+                name: "M4CR0Pad v3".to_owned(),
+                vendor_id: 0xE126,
+                product_id: 0x0042,
+                manufacturer: "Ergohaven".to_owned(),
+                serial_number: "resend-test".to_owned(),
+                bus_type: "USB".to_owned(),
+                path: "resend-test".to_owned(),
+                instance_token: "resend-test".to_owned(),
+                firmware: crate::firmware::FirmwareProtocol::Vial,
+            },
+            HostDataMode::default(),
+            None,
+            HostProtocol::Discover,
+        );
+        assert_eq!(
+            bridge
+                .application_layout_resend_generation
+                .load(Ordering::SeqCst),
+            0
+        );
+
+        bridge.force_application_layout_resend();
+
+        assert_eq!(
+            bridge
+                .application_layout_resend_generation
+                .load(Ordering::SeqCst),
+            1
+        );
+    }
 
     #[test]
     fn layout_live_data_uses_the_connected_hid_owner() {
@@ -2663,6 +2720,7 @@ mod host_protocol_tests {
                     Arc::new(Mutex::new(
                         crate::application_layouts::ApplicationLayoutSnapshot::inactive(),
                     )),
+                    Arc::new(AtomicU64::new(0)),
                     HostProtocol::Selected(extended),
                     Arc::new(AtomicBool::new(true)),
                     HostDataService::start(|| {
@@ -3063,6 +3121,7 @@ pub(crate) fn test_bridge_holding_transport(
             application_layout_snapshot: Arc::new(Mutex::new(
                 crate::application_layouts::ApplicationLayoutSnapshot::inactive(),
             )),
+            application_layout_resend_generation: Arc::new(AtomicU64::new(0)),
             shared_output: None,
             control,
             thread: Some(thread),

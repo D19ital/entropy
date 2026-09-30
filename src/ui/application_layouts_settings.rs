@@ -329,6 +329,13 @@ impl EntropyApp {
             control_font,
         );
 
+        if self
+            .application_layout_rename_target_id
+            .as_deref()
+            .is_some_and(|target_id| target_id != selected_id)
+        {
+            self.commit_pending_application_layout_rename();
+        }
         let editing_selected_name =
             self.application_layout_rename_target_id.as_deref() == Some(selected_id.as_str());
         let rename_invalid = editing_selected_name
@@ -399,8 +406,14 @@ impl EntropyApp {
                     if response.has_focus() {
                         submit_rename = ui.input(|input| input.key_pressed(egui::Key::Enter));
                         cancel_rename = ui.input(|input| input.key_pressed(egui::Key::Escape));
+                        if cancel_rename {
+                            ui.input_mut(|input| {
+                                input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+                            });
+                        }
                     }
                     submit_rename |= response.lost_focus();
+                    submit_rename |= ui.input(|input| input.viewport().focused == Some(false));
                     response.on_hover_text(app_layout_text(
                         language,
                         "Введите уникальное имя. Enter или потеря фокуса сохраняет, Esc отменяет. Пустое или повторяющееся имя подсвечивается красным",
@@ -457,28 +470,7 @@ impl EntropyApp {
         if cancel_rename {
             self.close_application_layout_rename();
         } else if submit_rename {
-            let rename_value = self.application_layout_rename_value.trim().to_owned();
-            let invalid = self
-                .app_settings
-                .application_layouts
-                .get(&device_key)
-                .is_none_or(|settings| {
-                    application_layout_name_is_invalid(settings, &selected_id, &rename_value)
-                });
-            if invalid {
-                self.application_layout_rename_focus_requested = true;
-            } else {
-                if rename_value != selected_name {
-                    if let Some(settings) =
-                        self.app_settings.application_layouts.get_mut(&device_key)
-                    {
-                        if settings.rename_layout(&selected_id, &rename_value) {
-                            save_app_settings(&self.app_settings);
-                        }
-                    }
-                }
-                self.close_application_layout_rename();
-            }
+            self.commit_pending_application_layout_rename();
         }
 
         if snapshot.editor_layout_id != selected_id {
@@ -563,41 +555,35 @@ impl EntropyApp {
                 },
             );
 
-            let automatic_switching_tooltip = if is_default {
-                app_layout_text(
-                    language,
-                    "Default — запасная раскладка, поэтому автопереключение для неё недоступно",
-                    "Default is the fallback layout, so automatic switching is unavailable for it",
-                )
-            } else {
-                app_layout_text(
+            if !is_default {
+                let automatic_switching_tooltip = app_layout_text(
                     language,
                     "Включать эту раскладку, когда связанное приложение находится в фокусе",
                     "Activate this layout when its associated application is focused",
-                )
-            };
-            crate::ui_style::settings_list_row_with_tooltip(
-                ui,
-                row_width,
-                row_height,
-                app_layout_text(language, "Автопереключение", "Automatic switching"),
-                !is_default,
-                Some(automatic_switching_tooltip),
-                metrics.value(46.0),
-                |ui| {
-                    crate::ui_style::settings_switch_sized_stable_interactive(
-                        ui,
-                        (
-                            "application_layout_automatic_switching",
-                            selected.id.as_str(),
-                        ),
-                        &mut automatic,
-                        metrics.size(46.0, 24.0),
-                        !is_default,
-                    )
-                    .on_hover_text(automatic_switching_tooltip);
-                },
-            );
+                );
+                crate::ui_style::settings_list_row_with_tooltip(
+                    ui,
+                    row_width,
+                    row_height,
+                    app_layout_text(language, "Автопереключение", "Automatic switching"),
+                    true,
+                    Some(automatic_switching_tooltip),
+                    metrics.value(46.0),
+                    |ui| {
+                        crate::ui_style::settings_switch_sized_stable_interactive(
+                            ui,
+                            (
+                                "application_layout_automatic_switching",
+                                selected.id.as_str(),
+                            ),
+                            &mut automatic,
+                            metrics.size(46.0, 24.0),
+                            true,
+                        )
+                        .on_hover_text(automatic_switching_tooltip);
+                    },
+                );
+            }
 
             if let Some(settings) = self.app_settings.application_layouts.get_mut(&device_key) {
                 if let Some(layout) = settings.layouts.get_mut(&selected.id) {
@@ -996,10 +982,43 @@ impl EntropyApp {
         self.application_layout_rename_focus_requested = true;
     }
 
-    fn close_application_layout_rename(&mut self) {
+    pub(super) fn close_application_layout_rename(&mut self) {
         self.application_layout_rename_focus_requested = false;
         self.application_layout_rename_target_id = None;
         self.application_layout_rename_value.clear();
+    }
+
+    pub(super) fn commit_pending_application_layout_rename(&mut self) -> bool {
+        let Some(target_id) = self.application_layout_rename_target_id.clone() else {
+            return true;
+        };
+        let Some(device_key) = self.application_layout_device_key() else {
+            return false;
+        };
+        let name = self.application_layout_rename_value.trim().to_owned();
+        let valid = self
+            .app_settings
+            .application_layouts
+            .get(&device_key)
+            .is_some_and(|settings| {
+                settings.layouts.contains_key(&target_id)
+                    && !application_layout_name_is_invalid(settings, &target_id, &name)
+            });
+        if !valid {
+            self.application_layout_rename_focus_requested = true;
+            return false;
+        }
+
+        let changed = self
+            .app_settings
+            .application_layouts
+            .get_mut(&device_key)
+            .is_some_and(|settings| settings.rename_layout(&target_id, &name));
+        if changed {
+            save_app_settings(&self.app_settings);
+        }
+        self.close_application_layout_rename();
+        true
     }
 
     fn open_application_picker(&mut self, assign_existing: bool) {

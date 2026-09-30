@@ -347,17 +347,28 @@ impl EntropyApp {
                     self.editing_layer_focus_requested = true;
                 }
                 // Commit on Enter or lost focus (click outside); cancel on Escape.
-                let commit = resp.lost_focus() || ui.input(|inp| inp.key_pressed(egui::Key::Enter));
+                let commit = resp.lost_focus()
+                    || ui.input(|inp| inp.key_pressed(egui::Key::Enter))
+                    || ui.input(|inp| inp.viewport().focused == Some(false));
                 let cancel = ui.input(|inp| inp.key_pressed(egui::Key::Escape));
+                if cancel {
+                    ui.input_mut(|input| {
+                        input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+                    });
+                }
                 if commit || cancel {
-                    if commit {
+                    if !cancel {
                         let proposed_name = self.editing_layer_text.trim().to_string();
                         if proposed_name.is_empty() {
                             self.editing_layer_text = raw_name.clone();
                         } else {
                             let new_name = proposed_name;
                             if self.application_layout_editor_active {
-                                self.rename_application_layout_layer(selected, new_name);
+                                if let Some(layout_id) = self.editing_layer_layout_id.clone() {
+                                    self.rename_application_layout_layer(
+                                        &layout_id, selected, new_name,
+                                    );
+                                }
                             } else {
                                 while self.layer_names.len() <= selected {
                                     self.layer_names.push(self.layer_names.len().to_string());
@@ -387,7 +398,9 @@ impl EntropyApp {
                         }
                     }
                     self.editing_layer = None;
+                    self.editing_layer_text.clear();
                     self.editing_layer_focus_requested = false;
+                    self.editing_layer_layout_id = None;
                 }
             } else {
                 // Fixed arrow positions based on max 7-char name width so
@@ -476,6 +489,13 @@ impl EntropyApp {
                 if name_r.clicked() && layer_name_edit_available {
                     self.editing_layer = Some(selected);
                     self.editing_layer_text = raw_name.clone();
+                    self.editing_layer_layout_id = self
+                        .application_layout_editor_active
+                        .then(|| {
+                            self.application_layout_settings()
+                                .map(|settings| settings.editor_layout_id.clone())
+                        })
+                        .flatten();
                 }
 
                 // Paint
