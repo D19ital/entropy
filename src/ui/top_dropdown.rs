@@ -24,6 +24,39 @@ pub(super) fn top_dropdown_frame(dark: bool) -> egui::Frame {
         .inner_margin(egui::Margin::symmetric(8, 6))
 }
 
+/// Shows a top dropdown popup at `pos`: a foreground area with the shared
+/// frame and rows laid out flush. Frame margin and stroke, row height and
+/// divider height are the whole geometry, so `top_dropdown_height`
+/// predicts the popup exactly.
+pub(super) fn show_top_dropdown<R>(
+    ctx: &egui::Context,
+    id: egui::Id,
+    pos: egui::Pos2,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    egui::Area::new(id)
+        .order(egui::Order::Foreground)
+        .fixed_pos(pos)
+        .show(ctx, |ui| {
+            top_dropdown_frame(ui.visuals().dark_mode)
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    add_contents(ui)
+                })
+                .inner
+        })
+}
+
+/// Outer height of a popup shown by `show_top_dropdown` with the given
+/// rows and dividers. Hover bridges rely on it matching the rendered popup.
+pub(super) fn top_dropdown_height(rows: usize, dividers: usize) -> f32 {
+    top_dropdown_frame(false).total_margin().sum().y
+        + rows as f32 * TOP_DROPDOWN_ITEM_HEIGHT
+        + dividers as f32 * TOP_DROPDOWN_DIVIDER_HEIGHT
+}
+
+/// Height of a row inside a top dropdown.
+pub(super) const TOP_DROPDOWN_ITEM_HEIGHT: f32 = 30.0;
 /// Height of a group divider row inside a top dropdown.
 pub(super) const TOP_DROPDOWN_DIVIDER_HEIGHT: f32 = 9.0;
 /// Extra row width taken by the icon column.
@@ -35,151 +68,6 @@ pub(super) const TOP_DROPDOWN_ICON_TEXT_LEFT: f32 = 10.0 + TOP_DROPDOWN_ICON_COL
 // The proportional family would pick some glyphs from egui's bundled
 // emoji fonts, which are drawn in a different style.
 const TOP_MENU_ICON_FAMILY: &str = "emoji_preview";
-
-/// Block of related rows in a top menu. Rows of one group share a tint,
-/// so the color marks the block, not a single row.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum TopMenuGroup {
-    Devices,
-    Layers,
-    Files,
-    Lighting,
-    Input,
-    KeyBehavior,
-    Service,
-    HostTools,
-    /// Rows about the app or the device itself.
-    Meta,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum TopMenuIcon {
-    Device,
-    KeyLegendOrder,
-    LayerOperations,
-    ImportLayout,
-    ExportLayout,
-    ExportImage,
-    LayoutIndicator,
-    AboutDevice,
-    TextExpander,
-    TypingTrainer,
-    Macros,
-    TapDance,
-    Combo,
-    AutoShift,
-    KeyOverrides,
-    Rgb,
-    LayerLeds,
-    Display,
-    DisplayPresets,
-    Encoders,
-    Touchpad,
-    Modules,
-    Bluetooth,
-    LiveFeatures,
-    TapHold,
-    Magic,
-    MatrixTester,
-    Lock,
-    Unlock,
-    AppSettings,
-    AboutEntropy,
-}
-
-impl TopMenuIcon {
-    // Glyphs must exist in the embedded fonts (Noto Emoji, Noto Sans
-    // Symbols 2, DejaVu) and render as line art there. Keycap-style emoji
-    // such as "📶" or "⏺" render as solid boxes and are avoided.
-    pub(super) fn glyph(self) -> &'static str {
-        match self {
-            TopMenuIcon::Device => "⌨",
-            TopMenuIcon::KeyLegendOrder => "🌐",
-            TopMenuIcon::LayerOperations => "☰",
-            TopMenuIcon::ImportLayout => "📥",
-            TopMenuIcon::ExportLayout => "📤",
-            TopMenuIcon::ExportImage => "🖼",
-            TopMenuIcon::LayoutIndicator => "📌",
-            TopMenuIcon::AboutDevice | TopMenuIcon::AboutEntropy => "🛈",
-            TopMenuIcon::TextExpander => "📝",
-            TopMenuIcon::TypingTrainer => "🎯",
-            TopMenuIcon::Macros => "📜",
-            TopMenuIcon::TapDance => "👆",
-            TopMenuIcon::Combo => "🔗",
-            TopMenuIcon::AutoShift => "⇧",
-            TopMenuIcon::KeyOverrides => "⇄",
-            TopMenuIcon::Rgb => "💡",
-            TopMenuIcon::LayerLeds => "🚦",
-            TopMenuIcon::Display => "🖥",
-            TopMenuIcon::DisplayPresets => "🎞",
-            TopMenuIcon::Encoders => "🎛",
-            TopMenuIcon::Touchpad => "🖱",
-            TopMenuIcon::Modules => "🧩",
-            TopMenuIcon::Bluetooth => "📡",
-            TopMenuIcon::LiveFeatures => "⚡",
-            TopMenuIcon::TapHold => "⏱",
-            TopMenuIcon::Magic => "🪄",
-            TopMenuIcon::MatrixTester => "▦",
-            TopMenuIcon::Lock => "🔒",
-            TopMenuIcon::Unlock => "🔓",
-            TopMenuIcon::AppSettings => "⚙",
-        }
-    }
-
-    pub(super) fn group(self) -> TopMenuGroup {
-        match self {
-            TopMenuIcon::Device => TopMenuGroup::Devices,
-            TopMenuIcon::KeyLegendOrder | TopMenuIcon::LayerOperations => TopMenuGroup::Layers,
-            TopMenuIcon::ImportLayout | TopMenuIcon::ExportLayout | TopMenuIcon::ExportImage => {
-                TopMenuGroup::Files
-            }
-            TopMenuIcon::TextExpander | TopMenuIcon::TypingTrainer => TopMenuGroup::HostTools,
-            TopMenuIcon::Macros
-            | TopMenuIcon::TapDance
-            | TopMenuIcon::Combo
-            | TopMenuIcon::AutoShift
-            | TopMenuIcon::KeyOverrides
-            | TopMenuIcon::TapHold
-            | TopMenuIcon::Magic => TopMenuGroup::KeyBehavior,
-            TopMenuIcon::Rgb
-            | TopMenuIcon::LayerLeds
-            | TopMenuIcon::Display
-            | TopMenuIcon::DisplayPresets => TopMenuGroup::Lighting,
-            TopMenuIcon::Encoders
-            | TopMenuIcon::Touchpad
-            | TopMenuIcon::Modules
-            | TopMenuIcon::Bluetooth
-            | TopMenuIcon::LiveFeatures => TopMenuGroup::Input,
-            TopMenuIcon::MatrixTester | TopMenuIcon::Lock | TopMenuIcon::Unlock => {
-                TopMenuGroup::Service
-            }
-            TopMenuIcon::LayoutIndicator
-            | TopMenuIcon::AboutDevice
-            | TopMenuIcon::AppSettings
-            | TopMenuIcon::AboutEntropy => TopMenuGroup::Meta,
-        }
-    }
-}
-
-// Group tints come from the Okabe-Ito colorblind-safe palette, adjusted
-// per theme for contrast. Color is a redundant cue on top of glyph and
-// divider, never the only difference between rows.
-pub(super) fn top_menu_group_tint(group: TopMenuGroup, dark: bool) -> Color32 {
-    let ((dr, dg, db), (lr, lg, lb)) = match group {
-        TopMenuGroup::Devices | TopMenuGroup::Input => ((86, 180, 233), (40, 116, 166)),
-        TopMenuGroup::Layers | TopMenuGroup::KeyBehavior => ((179, 157, 219), (126, 87, 194)),
-        TopMenuGroup::Files => ((77, 182, 172), (0, 121, 107)),
-        TopMenuGroup::Lighting => ((233, 196, 76), (156, 126, 29)),
-        TopMenuGroup::Service => ((240, 130, 79), (208, 90, 30)),
-        TopMenuGroup::HostTools => ((60, 190, 142), (11, 138, 98)),
-        TopMenuGroup::Meta => ((158, 154, 161), (117, 113, 122)),
-    };
-    if dark {
-        Color32::from_rgb(dr, dg, db)
-    } else {
-        Color32::from_rgb(lr, lg, lb)
-    }
-}
 
 /// Decides which menu groups get a divider after them, given the number
 /// of visible rows per group. A group with a single row is too small to
@@ -323,7 +211,12 @@ fn top_dropdown_item_with_accessory(
     } else {
         Sense::hover()
     };
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 30.0), sense);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, TOP_DROPDOWN_ITEM_HEIGHT), sense);
+    // Rows are painted by hand, so assistive technology learns the role,
+    // label, enabled state and selection from here.
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, selected, label)
+    });
     let hovered = resp.hovered() && enabled;
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -360,7 +253,7 @@ fn top_dropdown_item_with_accessory(
             } else if selected {
                 app_accent()
             } else {
-                top_menu_group_tint(icon.group(), dark)
+                icon.tint(dark)
             };
             paint_top_menu_icon(
                 ui,
@@ -525,83 +418,91 @@ impl EntropyApp {
 mod tests {
     use super::*;
 
-    const LAYOUT_MENU_ICONS: [TopMenuIcon; 8] = [
-        TopMenuIcon::Device,
-        TopMenuIcon::KeyLegendOrder,
-        TopMenuIcon::LayerOperations,
-        TopMenuIcon::ImportLayout,
-        TopMenuIcon::ExportLayout,
-        TopMenuIcon::ExportImage,
-        TopMenuIcon::LayoutIndicator,
-        TopMenuIcon::AboutDevice,
-    ];
-    const ADVANCED_MENU_ICONS: [TopMenuIcon; 7] = [
-        TopMenuIcon::TextExpander,
-        TopMenuIcon::TypingTrainer,
-        TopMenuIcon::Macros,
-        TopMenuIcon::TapDance,
-        TopMenuIcon::Combo,
-        TopMenuIcon::AutoShift,
-        TopMenuIcon::KeyOverrides,
-    ];
-    const CONFIG_MENU_ICONS: [TopMenuIcon; 16] = [
-        TopMenuIcon::Rgb,
-        TopMenuIcon::LayerLeds,
-        TopMenuIcon::Display,
-        TopMenuIcon::DisplayPresets,
-        TopMenuIcon::Encoders,
-        TopMenuIcon::Touchpad,
-        TopMenuIcon::Modules,
-        TopMenuIcon::Bluetooth,
-        TopMenuIcon::LiveFeatures,
-        TopMenuIcon::TapHold,
-        TopMenuIcon::Magic,
-        TopMenuIcon::MatrixTester,
-        TopMenuIcon::Lock,
-        TopMenuIcon::Unlock,
-        TopMenuIcon::AppSettings,
-        TopMenuIcon::AboutEntropy,
-    ];
+    /// Renders a popup with `rows` rows, the first `dividers` of them
+    /// followed by a divider, and returns its rect.
+    fn rendered_popup_rect(ctx: &egui::Context, rows: usize, dividers: usize) -> egui::Rect {
+        let mut rect = egui::Rect::NOTHING;
+        // Two frames: an area sizes itself on its first one.
+        for _ in 0..2 {
+            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let popup = show_top_dropdown(
+                    ui.ctx(),
+                    egui::Id::new(("test_dropdown", rows, dividers)),
+                    egui::Pos2::ZERO,
+                    |ui| {
+                        for row in 0..rows {
+                            top_dropdown_icon_item(
+                                ui,
+                                160.0,
+                                TopMenuIcon::Device,
+                                "Row",
+                                true,
+                                false,
+                            );
+                            if row < dividers {
+                                top_dropdown_divider(ui, 160.0);
+                            }
+                        }
+                    },
+                );
+                rect = popup.response.rect;
+            });
+        }
+        rect
+    }
 
     #[test]
-    fn menu_icons_are_unique_within_each_menu() {
-        for menu in [
-            LAYOUT_MENU_ICONS.as_slice(),
-            ADVANCED_MENU_ICONS.as_slice(),
-            CONFIG_MENU_ICONS.as_slice(),
-        ] {
-            let mut seen = std::collections::HashSet::new();
-            for icon in menu {
-                assert!(seen.insert(icon.glyph()), "duplicate glyph for {icon:?}");
-            }
+    fn dropdown_height_matches_the_rendered_popup() {
+        let ctx = egui::Context::default();
+        for (rows, dividers) in [(1, 0), (2, 1), (7, 1), (16, 4)] {
+            let rendered = rendered_popup_rect(&ctx, rows, dividers).height();
+            let predicted = top_dropdown_height(rows, dividers);
+            assert!(
+                (rendered - predicted).abs() < 0.01,
+                "{rows} rows, {dividers} dividers: rendered {rendered}, predicted {predicted}"
+            );
         }
     }
 
     #[test]
-    fn menu_icon_glyphs_exist_in_the_icon_font_family() {
-        use ab_glyph::Font as _;
+    fn dropdown_rows_expose_button_semantics() {
+        use egui::accesskit::{Role, Toggled};
 
-        // Same fonts and order as the "emoji_preview" family.
-        let fonts = [
-            include_bytes!("../../assets/NotoEmoji-Regular.ttf").as_slice(),
-            include_bytes!("../../assets/NotoSansSymbols2-Regular.ttf").as_slice(),
-            include_bytes!("../../assets/DejaVuSans.ttf").as_slice(),
-        ]
-        .map(|bytes| ab_glyph::FontRef::try_from_slice(bytes).expect("embedded font parses"));
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            top_dropdown_icon_item(ui, 160.0, TopMenuIcon::Rgb, "Lighting", true, true);
+            top_dropdown_icon_item(
+                ui,
+                160.0,
+                TopMenuIcon::Lock,
+                "Unlock keyboard",
+                false,
+                false,
+            );
+        });
+        let update = output
+            .platform_output
+            .accesskit_update
+            .expect("accesskit tree is emitted");
+        let node = |label: &str| {
+            update
+                .nodes
+                .iter()
+                .map(|(_, node)| node)
+                .find(|node| node.label() == Some(label))
+                .unwrap_or_else(|| panic!("no accessibility node labeled {label:?}"))
+        };
 
-        for icon in LAYOUT_MENU_ICONS
-            .iter()
-            .chain(&ADVANCED_MENU_ICONS)
-            .chain(&CONFIG_MENU_ICONS)
-        {
-            for ch in icon.glyph().chars() {
-                assert!(
-                    fonts.iter().any(|font| font.glyph_id(ch).0 != 0),
-                    "{icon:?} glyph U+{:04X} is missing from the embedded fonts",
-                    ch as u32
-                );
-            }
-        }
+        let selected = node("Lighting");
+        assert_eq!(selected.role(), Role::Button);
+        assert!(!selected.is_disabled());
+        assert_eq!(selected.toggled(), Some(Toggled::True));
+
+        let disabled = node("Unlock keyboard");
+        assert_eq!(disabled.role(), Role::Button);
+        assert!(disabled.is_disabled());
+        assert_eq!(disabled.toggled(), Some(Toggled::False));
     }
 
     #[test]

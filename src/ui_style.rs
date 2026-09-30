@@ -92,10 +92,16 @@ fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
 }
 
 pub fn hover_fill(dark: bool) -> Color32 {
+    hover_fill_for_accent(dark, accent())
+}
+
+/// Hover fill as it looks with the given accent color. Lets checks cover
+/// every accent without touching the global accent.
+pub fn hover_fill_for_accent(dark: bool, accent: Color32) -> Color32 {
     if dark {
-        mix(Color32::from_rgb(45, 45, 48), accent(), 0.22)
+        mix(Color32::from_rgb(45, 45, 48), accent, 0.22)
     } else {
-        mix(Color32::from_rgb(255, 255, 255), accent(), 0.16)
+        mix(Color32::from_rgb(255, 255, 255), accent, 0.16)
     }
 }
 
