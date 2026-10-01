@@ -287,6 +287,10 @@ return_to_layout_hint = "ПКМ или Esc — вернуться к раскл�
 
 [unlock]
 highlighted_keys_hint = "Нажмите и удерживайте подсвеченные клавиши"
+start_hint = "Для этого действия требуется разблокировка"
+safety_warning = "После нажатия «Начать» ввод с клавиатуры приостанавливается. Не закрывайте Entropy до завершения разблокировки. При прерывании переподключите клавиатуру."
+start = "Начать"
+cancel = "Отмена"
 
 [universal_symbols_setup]
 open_privacy_settings = "Открыть настройки приватности"
@@ -1332,6 +1336,7 @@ auto_layer_sniper_tooltip = "Автоматически переключатьс
 auto_layer_scroll_tooltip = "Автоматически переключаться на выбранный слой в режиме скролла"
 auto_layer_text_tooltip = "Автоматически переключаться на выбранный слой в текстовом режиме"
 auto_layer_timeout_tooltip = "Сколько прошивка держит автослой активным после остановки движения модуля"
+auto_layer_threshold_tooltip = "Сколько нужно провернуть трекбол, чтобы включился автослой: 0–100; 0 — с первого отсчёта"
 auto_layer_deactivate_on_key_tooltip = "Выключать автослой сразу при нажатии любой не-мышиной клавиши"
 trackball_enabled = "Трекбол включён"
 trackball_enabled_tooltip = "Включает движение указателя от трекбола и активацию мышиного автослоя"
@@ -1382,6 +1387,7 @@ auto_layer_in_sniper = "Автослой в точном режиме"
 auto_layer_in_scroll = "Автослой при прокрутке"
 auto_layer_in_text = "Автослой в текстовом режиме"
 auto_layer_timeout = "Таймаут автослоя"
+auto_layer_threshold = "Порог автослоя"
 auto_layer_deactivate_on_key = "Выключение автослоя по клавише"
 normal = "Обычный"
 sniper = "Точный"
