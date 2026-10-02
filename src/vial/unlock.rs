@@ -225,7 +225,7 @@ impl EntropyApp {
                     // Center the preflight title, text, and buttons as a group.
                     // Leave the active unlock layout in its existing position.
                     let top_y = if preflight {
-                        screen.center().y - 80.0
+                        screen.center().y - 65.0
                     } else {
                         screen.min.y + 40.0
                     };
@@ -243,18 +243,8 @@ impl EntropyApp {
                     );
 
                     if preflight {
-                        ui.painter().text(
-                            egui::pos2(center_x, top_y + 38.0),
-                            egui::Align2::CENTER_CENTER,
-                            crate::i18n::tr_catalog(
-                                self.app_settings.language,
-                                "unlock.start_hint",
-                            ),
-                            FontId::proportional(16.0),
-                            subtitle_color,
-                        );
                         let warning_rect = egui::Rect::from_center_size(
-                            egui::pos2(center_x, top_y + 90.0),
+                            egui::pos2(center_x, top_y + 65.0),
                             egui::vec2(screen.width().min(560.0), 54.0),
                         );
                         crate::ui_style::allocate_ui_at_rect(ui, warning_rect, |ui| {
@@ -269,7 +259,7 @@ impl EntropyApp {
                             );
                         });
                         let buttons_rect = egui::Rect::from_center_size(
-                            egui::pos2(center_x, top_y + 160.0),
+                            egui::pos2(center_x, top_y + 130.0),
                             egui::vec2(260.0, 36.0),
                         );
                         crate::ui_style::allocate_ui_at_rect(ui, buttons_rect, |ui| {
@@ -442,7 +432,7 @@ mod tests {
     fn click_preflight_button(app: &mut EntropyApp, ctx: &egui::Context, start: bool) {
         frame(app, ctx, Vec::new());
         // The preflight row is centered in the 1100px test viewport.
-        let pos = egui::pos2(if start { 600.0 } else { 480.0 }, 480.0);
+        let pos = egui::pos2(if start { 600.0 } else { 480.0 }, 465.0);
         frame(app, ctx, vec![egui::Event::PointerMoved(pos)]);
         for pressed in [true, false] {
             frame(
