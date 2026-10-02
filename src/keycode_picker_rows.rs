@@ -79,10 +79,16 @@ impl PickerRow {
 
     /// Case-insensitive substring match over caption, aliases, tooltip and
     /// section heading. `needle_lower` must already be normalized.
-    pub(super) fn matches(&self, needle_lower: &str) -> bool {
+    pub(super) fn matches(&self, needle_lower: &str, tab_heading: Option<&str>) -> bool {
         search_text_matches(
             needle_lower,
-            &[&self.label, &self.aliases, &self.tooltip, self.section],
+            &[
+                &self.label,
+                &self.aliases,
+                &self.tooltip,
+                self.section,
+                tab_heading.unwrap_or(""),
+            ],
         )
     }
 }
@@ -119,11 +125,19 @@ pub(super) struct RowCache {
 }
 
 /// Section heading above a group of keycaps.
+pub(super) fn picker_heading_color(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_gray(150)
+    } else {
+        Color32::from_gray(110)
+    }
+}
+
 pub(super) fn show_section_heading(ui: &mut egui::Ui, text: &str) {
     ui.label(
         RichText::new(text)
             .size(11.0)
-            .color(Color32::from_gray(150)),
+            .color(picker_heading_color(ui.visuals().dark_mode)),
     );
     ui.add_space(4.0);
 }
@@ -439,6 +453,30 @@ mod tests {
     use super::*;
     use crate::keyboard::KeyBinding;
 
+    #[test]
+    fn picker_headings_meet_normal_text_contrast_in_both_themes() {
+        let luminance = |color: Color32| {
+            let channel = color.r() as f64 / 255.0;
+            if channel <= 0.04045 {
+                channel / 12.92
+            } else {
+                ((channel + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        for dark in [false, true] {
+            let text = picker_heading_color(dark);
+            let background = crate::ui_style::surface_fill(dark);
+            assert_eq!(text.r(), text.g());
+            assert_eq!(text.g(), text.b());
+            let (a, b) = (luminance(text), luminance(background));
+            let contrast = (a.max(b) + 0.05) / (a.min(b) + 0.05);
+            assert!(
+                contrast >= 4.5,
+                "{dark:?} theme heading contrast {contrast:.2}:1"
+            );
+        }
+    }
+
     fn full_picker() -> KeycodePicker {
         KeycodePicker {
             supports_rmk_native_key_actions: true,
@@ -652,8 +690,8 @@ mod tests {
         .with_aliases("  ")
         .with_aliases("RGB_VAD");
         assert_eq!(row.aliases, "Brightness - RGB_VAD");
-        assert!(row.matches("brightness -"));
-        assert!(row.matches("bright -"));
-        assert!(!row.matches("hue"));
+        assert!(row.matches("brightness -", None));
+        assert!(row.matches("bright -", None));
+        assert!(!row.matches("hue", None));
     }
 }

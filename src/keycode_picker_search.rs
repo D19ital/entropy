@@ -39,6 +39,27 @@ fn normalized_query(query: &str) -> String {
     query.trim().replace('\n', " ").to_lowercase()
 }
 
+/// Disambiguate equal captions within a search group with their QMK names.
+/// The regular tab keeps its compact keycaps; search can put distinct actions
+/// (e.g. media Stop and browser Stop) right next to one another.
+fn search_result_row(row: &PickerRow, group: &[PickerRow]) -> PickerRow {
+    let mut result = row.clone();
+    if group
+        .iter()
+        .any(|other| other.action != row.action && other.label == row.label)
+    {
+        if let Some(name) = row
+            .aliases
+            .split_whitespace()
+            .find(|name| name.starts_with("KC_"))
+        {
+            let caption = row.label.rsplit('\n').next().unwrap_or(&row.label);
+            result.label = format!("{}\n{}", name.trim_start_matches("KC_"), caption);
+        }
+    }
+    result
+}
+
 /// Case-insensitive substring match over several texts; newlines count as
 /// spaces. `needle_lower` must already be normalized.
 pub(super) fn search_text_matches(needle_lower: &str, haystacks: &[&str]) -> bool {
@@ -76,7 +97,9 @@ impl KeycodePicker {
         let mut results: Vec<PickerRow> = Vec::new();
         for row in self.search_rows() {
             // A key visible on two tabs is listed once, under the first tab.
-            if row.matches(&query) && !results.iter().any(|hit| hit.action == row.action) {
+            if row.matches(&query, self.tab_heading(row.tab))
+                && !results.iter().any(|hit| hit.action == row.action)
+            {
                 results.push(row);
             }
         }
@@ -103,7 +126,7 @@ impl KeycodePicker {
                 &[("count", self.search.results().len().to_string().as_str())],
             ))
             .size(11.0)
-            .color(Color32::from_gray(150)),
+            .color(picker_heading_color(ui.visuals().dark_mode)),
         );
         ui.add_space(4.0);
 
@@ -131,6 +154,11 @@ impl KeycodePicker {
                         .color(tab.style().tint(dark)),
                 );
                 let mut heading = picker_tab_label(self.language, tab).to_string();
+                let section = if section.is_empty() {
+                    self.tab_heading(tab).unwrap_or("")
+                } else {
+                    section
+                };
                 if !section.is_empty() {
                     heading.push_str(" · ");
                     heading.push_str(section);
@@ -138,13 +166,13 @@ impl KeycodePicker {
                 ui.label(
                     RichText::new(heading)
                         .size(11.0)
-                        .color(Color32::from_gray(150)),
+                        .color(picker_heading_color(dark)),
                 );
             });
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 for row in &rows {
-                    self.show_picker_row(ui, row, states);
+                    self.show_picker_row(ui, &search_result_row(row, &rows), states);
                 }
             });
         }
@@ -213,6 +241,19 @@ mod tests {
 
         search(&mut picker, "");
         assert!(picker.search.results().is_empty());
+    }
+
+    #[test]
+    fn single_section_heading_is_searchable() {
+        let mut picker = KeycodePicker::default();
+        let basic_heading = picker.tab_heading(KeycodeTab::Basic).unwrap();
+        let results = search(&mut picker, "standard keyboard layout");
+        assert!(!results.is_empty());
+        assert!(results.iter().all(|row| row.tab == KeycodeTab::Basic));
+        assert!(results.iter().all(|row| row.section.is_empty()));
+        assert!(results
+            .iter()
+            .all(|row| row.matches("standard keyboard layout", Some(basic_heading))));
     }
 
     #[test]
@@ -309,6 +350,25 @@ mod tests {
             assert_eq!(row.tab, KeycodeTab::Special);
             assert_eq!(row.section, media_section);
         }
+        let media = hit(&results, PickerAction::Assign(KeyBinding::Vial(0x00AD))).unwrap();
+        let browser = hit(&results, PickerAction::Assign(KeyBinding::Vial(0x00B8))).unwrap();
+        let stop_group: Vec<PickerRow> = results
+            .iter()
+            .filter(|row| row.section == media_section)
+            .cloned()
+            .collect();
+        assert_eq!(
+            search_result_row(media, &stop_group).accessible_name(),
+            "MSTP Stop"
+        );
+        assert_eq!(
+            search_result_row(browser, &stop_group).accessible_name(),
+            "WSTP Stop"
+        );
+        assert_ne!(
+            search_result_row(media, &stop_group).label,
+            search_result_row(browser, &stop_group).label
+        );
 
         let results = search(&mut picker, "kana");
         let jis = hit(&results, PickerAction::Assign(KeyBinding::Vial(0x0088)))

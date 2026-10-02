@@ -41,6 +41,10 @@ pub(super) fn show_top_dropdown<R>(
             top_dropdown_frame(ui.visuals().dark_mode)
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
+                    // The popup Ui persists across frames; begin with a fresh block.
+                    ui.ctx().data_mut(|data| {
+                        data.remove::<TopMenuGroup>(top_menu_block_id(ui));
+                    });
                     add_contents(ui)
                 })
                 .inner
@@ -95,7 +99,28 @@ pub(super) fn top_menu_dividers<const N: usize>(group_sizes: [usize; N]) -> [boo
     divider_after
 }
 
+// Paint-only cursor: a divider, not a catalog group change, starts a new
+// visible block. The Ui id keeps submenu tints independent of their parent.
+fn top_menu_block_id(ui: &egui::Ui) -> egui::Id {
+    ui.id().with("top_menu_block_group")
+}
+
+fn top_menu_block_tint(ui: &egui::Ui, icon: TopMenuIcon, dark: bool) -> Color32 {
+    let group = ui.ctx().data_mut(|data| {
+        let id = top_menu_block_id(ui);
+        data.get_temp::<TopMenuGroup>(id).unwrap_or_else(|| {
+            let group = icon.group();
+            data.insert_temp(id, group);
+            group
+        })
+    });
+    group.tint(dark)
+}
+
 pub(super) fn top_dropdown_divider(ui: &mut egui::Ui, width: f32) {
+    ui.ctx().data_mut(|data| {
+        data.remove::<TopMenuGroup>(top_menu_block_id(ui));
+    });
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(width, TOP_DROPDOWN_DIVIDER_HEIGHT),
         Sense::hover(),
@@ -212,6 +237,8 @@ fn top_dropdown_item_with_accessory(
         Sense::hover()
     };
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, TOP_DROPDOWN_ITEM_HEIGHT), sense);
+    // Even a selected or disabled first row determines this block's tint.
+    let block_tint = icon.map(|icon| top_menu_block_tint(ui, icon, dark));
     // Rows are painted by hand, so assistive technology learns the role,
     // label, enabled state and selection from here.
     resp.widget_info(|| {
@@ -253,7 +280,7 @@ fn top_dropdown_item_with_accessory(
             } else if selected {
                 app_accent()
             } else {
-                icon.tint(dark)
+                block_tint.expect("icon row has a block tint")
             };
             paint_top_menu_icon(
                 ui,
@@ -503,6 +530,97 @@ mod tests {
         assert_eq!(disabled.role(), Role::Button);
         assert!(disabled.is_disabled());
         assert_eq!(disabled.toggled(), Some(Toggled::False));
+    }
+
+    #[test]
+    fn coalesced_config_groups_share_one_tint_until_a_divider() {
+        let dividers = top_menu_dividers([1, 2, 1, 2, 2]);
+        assert_eq!(dividers, [false, false, true, true, false]);
+        for dark in [false, true] {
+            let ctx = egui::Context::default();
+            ctx.set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
+            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                // Selected/disabled opening rows still choose the block hue.
+                top_dropdown_icon_item(ui, 160.0, TopMenuIcon::Rgb, "RGB", true, true);
+                for icon in [
+                    TopMenuIcon::Encoders,
+                    TopMenuIcon::Touchpad,
+                    TopMenuIcon::Magic,
+                ] {
+                    top_dropdown_icon_item(ui, 160.0, icon, icon.glyph(), true, false);
+                    assert_eq!(
+                        top_menu_block_tint(ui, icon, dark),
+                        TopMenuGroup::Lighting.tint(dark)
+                    );
+                }
+                top_dropdown_divider(ui, 160.0);
+                top_dropdown_icon_item(
+                    ui,
+                    160.0,
+                    TopMenuIcon::MatrixTester,
+                    "Matrix",
+                    false,
+                    false,
+                );
+                assert_eq!(
+                    top_menu_block_tint(ui, TopMenuIcon::Lock, dark),
+                    TopMenuGroup::Service.tint(dark)
+                );
+                top_dropdown_divider(ui, 160.0);
+                top_dropdown_icon_item(ui, 160.0, TopMenuIcon::AppSettings, "App", true, false);
+                assert_eq!(
+                    top_menu_block_tint(ui, TopMenuIcon::AboutEntropy, dark),
+                    TopMenuGroup::Meta.tint(dark)
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn leading_singleton_sets_the_joined_block_tint() {
+        let ctx = egui::Context::default();
+        assert_eq!(
+            top_menu_dividers([0, 0, 1, 2, 2]),
+            [false, false, false, true, false]
+        );
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            top_dropdown_icon_item(ui, 160.0, TopMenuIcon::Magic, "Magic", true, false);
+            top_dropdown_icon_item(ui, 160.0, TopMenuIcon::MatrixTester, "Matrix", true, false);
+            assert_eq!(
+                top_menu_block_tint(ui, TopMenuIcon::Lock, false),
+                TopMenuGroup::KeyBehavior.tint(false)
+            );
+            top_dropdown_divider(ui, 160.0);
+            assert_eq!(
+                top_menu_block_tint(ui, TopMenuIcon::AppSettings, false),
+                TopMenuGroup::Meta.tint(false)
+            );
+        });
+    }
+
+    #[test]
+    fn popup_resets_tint_between_frames() {
+        let ctx = egui::Context::default();
+        for first in [TopMenuIcon::Rgb, TopMenuIcon::TextExpander] {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                show_top_dropdown(
+                    ctx,
+                    egui::Id::new("tint_popup"),
+                    egui::pos2(8.0, 8.0),
+                    |ui| {
+                        top_dropdown_icon_item(ui, 160.0, first, "First", true, false);
+                        assert_eq!(
+                            top_menu_block_tint(ui, TopMenuIcon::Lock, false),
+                            first.group().tint(false)
+                        );
+                    },
+                );
+            });
+        }
     }
 
     #[test]

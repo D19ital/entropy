@@ -275,3 +275,71 @@ impl EntropyApp {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn locked_vial_macro_menu_click_opens_unlock_preflight() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        app.firmware = FirmwareProtocol::Vial;
+        app.layout = Some(
+            KeyboardLayout::from_vial_json(&serde_json::json!({
+                "name": "Test keyboard",
+                "matrix": { "rows": 1, "cols": 1 },
+                "layouts": { "keymap": [["0,0"]] }
+            }))
+            .unwrap(),
+        );
+        app.vial_unlocked = Some(false);
+        app.keycode_picker.supports_macro = true;
+        app.keycode_picker.macro_count = 1;
+        let tab = egui::Rect::from_min_size(egui::pos2(400.0, 10.0), egui::vec2(100.0, 32.0));
+        let draw = |app: &mut EntropyApp, events| {
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    app.draw_layout_advanced_dropdown(
+                        ui,
+                        crate::i18n::Language::English,
+                        Some(tab),
+                        false,
+                        true,
+                        false,
+                    )
+                },
+            );
+        };
+        draw(&mut app, vec![]);
+        // Two host-tool rows, then a divider, then the Macros row.
+        let pos = egui::pos2(tab.center().x, tab.bottom() + 6.0 + 6.0 + 60.0 + 9.0 + 15.0);
+        draw(&mut app, vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            draw(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert!(app.main_menu_tab == MainMenuTab::Advanced);
+        assert!(app.settings_tab == SettingsTab::Macros);
+        assert!(app.unlock_open);
+        assert!(!app.vial_unlock_session_started);
+    }
+}

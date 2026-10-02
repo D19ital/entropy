@@ -1,14 +1,15 @@
 //! Catalog of the top menu icons.
 //!
 //! A menu row names its icon with [`TopMenuIcon`]. The catalog maps the icon
-//! to a glyph and to the group it belongs to, and maps the group to a tint.
-//! The renderer in `top_dropdown.rs` reads this data through the methods
-//! below and holds no glyph, group or color knowledge of its own.
+//! to a glyph and to its semantic group, and maps groups to tints.
+//! The renderer in `top_dropdown.rs` uses the first icon group in each
+//! divider-delimited visual block as the tint for that entire block. A
+//! single-row semantic group can join its neighbor without changing hue.
 
 use super::*;
 
-/// Block of related rows in a top menu. Rows of one group share a tint,
-/// so the color marks the block, not a single row.
+/// Semantic group of related menu rows. The actual painted block may
+/// contain multiple groups when the divider policy coalesces short groups.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TopMenuGroup {
     Devices,
@@ -182,11 +183,6 @@ impl TopMenuIcon {
 
     pub(super) fn group(self) -> TopMenuGroup {
         self.entry().1
-    }
-
-    /// Tint of the icon in its default state: the tint of its group.
-    pub(super) fn tint(self, dark: bool) -> Color32 {
-        self.group().tint(dark)
     }
 }
 

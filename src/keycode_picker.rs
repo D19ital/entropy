@@ -335,6 +335,53 @@ mod tests {
     }
 
     #[test]
+    fn tabs_are_grouped_and_control_the_labelled_panel() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{NodeT, Queryable};
+
+        let mut harness = open_picker_harness(english_picker());
+        let list = harness.get_by_role(Role::TabList);
+        assert!(list
+            .children()
+            .any(|node| node.accesskit_node().role() == Role::Tab));
+        let panel = harness.get_by_role(Role::TabPanel);
+        let basic = harness.get_by_role_and_label(Role::Tab, "Basic");
+        assert_eq!(
+            basic.accesskit_node().controls().next().unwrap().id(),
+            panel.accesskit_node().id()
+        );
+        assert_eq!(
+            panel.accesskit_node().labelled_by().next().unwrap().id(),
+            basic.accesskit_node().id()
+        );
+
+        harness.get_by_role_and_label(Role::Tab, "Special").click();
+        harness.run();
+        let panel = harness.get_by_role(Role::TabPanel);
+        let special = harness.get_by_role_and_label(Role::Tab, "Special");
+        assert_eq!(
+            special.accesskit_node().controls().next().unwrap().id(),
+            panel.accesskit_node().id()
+        );
+        assert_eq!(
+            panel.accesskit_node().labelled_by().next().unwrap().id(),
+            special.accesskit_node().id()
+        );
+    }
+
+    #[test]
+    fn single_section_search_results_show_their_heading() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+
+        let mut picker = english_picker();
+        picker.search.query = "standard keyboard layout".into();
+        let harness = open_picker_harness(picker);
+        assert!(!harness.state().search.results().is_empty());
+        harness.get_by_role_and_label(Role::Label, "Basic · Basic keys — standard keyboard layout");
+    }
+
+    #[test]
     fn search_results_and_clear_control_are_accessible() {
         use egui::accesskit::Role;
         use egui_kittest::kittest::{NodeT, Queryable};
@@ -1715,6 +1762,8 @@ impl KeycodePicker {
 
             // Tab bar
             let visible_tabs = self.visible_vial_tabs();
+            let panel_id = ui.id().with("picker_tab_panel");
+            let mut selected_tab_id = None;
             let tab_spacing = 6.0;
             let tab_bar_width: f32 = visible_tabs
                 .iter()
@@ -1722,6 +1771,9 @@ impl KeycodePicker {
                 .sum::<f32>()
                 + tab_spacing * visible_tabs.len().saturating_sub(1) as f32;
             ui.horizontal(|ui| {
+                ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+                    node.set_role(egui::accesskit::Role::TabList);
+                });
                 ui.spacing_mut().item_spacing = egui::vec2(tab_spacing, 6.0);
                 let x_offset = ((ui.available_width() - tab_bar_width).max(0.0) * 0.5).floor();
                 if x_offset > 0.0 {
@@ -1730,7 +1782,12 @@ impl KeycodePicker {
                 for tab in &visible_tabs {
                     let active = self.selected_tab == *tab;
                     let tab_label = picker_tab_label(self.language, *tab);
-                    if picker_tab_button(ui, tab.style(), tab_label, active).clicked() {
+                    let tab_resp = picker_tab_button(ui, tab.style(), tab_label, active, panel_id);
+                    if active {
+                        selected_tab_id = Some(tab_resp.id);
+                    }
+                    if tab_resp.clicked() {
+                        selected_tab_id = Some(tab_resp.id);
                         if self.selected_tab != *tab {
                             if *tab == KeycodeTab::Macro {
                                 self.macro_inline_selected = None;
@@ -1753,66 +1810,76 @@ impl KeycodePicker {
             let searching = self.search.is_active();
 
             let content_height = key_picker_main_content_height(picker_size);
-            ui.allocate_ui_with_layout(
-                Vec2::new(ui.available_width(), content_height),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    ui.set_min_height(content_height);
-                    egui::ScrollArea::vertical()
-                        .max_height(content_height)
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            ui.scope(|ui| {
-                                apply_picker_button_visuals(ui);
+            ui.scope_builder(egui::UiBuilder::new().id(panel_id), |ui| {
+                ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+                    node.set_role(egui::accesskit::Role::TabPanel);
+                    if let Some(tab_id) = selected_tab_id {
+                        node.set_labelled_by(vec![tab_id.accesskit_id()]);
+                    }
+                });
+                ui.allocate_ui_with_layout(
+                    Vec2::new(ui.available_width(), content_height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.set_min_height(content_height);
+                        egui::ScrollArea::vertical()
+                            .max_height(content_height)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.scope(|ui| {
+                                    apply_picker_button_visuals(ui);
 
-                                if searching {
-                                    let centered_width = self.tab_content_width(ui);
-                                    let x_offset =
-                                        ((ui.available_width() - centered_width).max(0.0) * 0.5)
+                                    if searching {
+                                        let centered_width = self.tab_content_width(ui);
+                                        let x_offset = ((ui.available_width() - centered_width)
+                                            .max(0.0)
+                                            * 0.5)
                                             .floor();
-                                    ui.horizontal(|ui| {
-                                        if x_offset > 0.0 {
-                                            ui.add_space(x_offset);
-                                        }
-                                        ui.allocate_ui_with_layout(
-                                            Vec2::new(centered_width, 0.0),
-                                            egui::Layout::top_down(egui::Align::Min),
-                                            |ui| self.show_vial_search_results(ui, slot_states),
+                                        ui.horizontal(|ui| {
+                                            if x_offset > 0.0 {
+                                                ui.add_space(x_offset);
+                                            }
+                                            ui.allocate_ui_with_layout(
+                                                Vec2::new(centered_width, 0.0),
+                                                egui::Layout::top_down(egui::Align::Min),
+                                                |ui| self.show_vial_search_results(ui, slot_states),
+                                            );
+                                        });
+                                    } else if self.selected_tab == KeycodeTab::Basic {
+                                        ui.add_space(28.0);
+                                        self.show_vial_tab_content(
+                                            ui,
+                                            macro_data_state,
+                                            tap_dance_data_state,
                                         );
-                                    });
-                                } else if self.selected_tab == KeycodeTab::Basic {
-                                    ui.add_space(28.0);
-                                    self.show_vial_tab_content(
-                                        ui,
-                                        macro_data_state,
-                                        tap_dance_data_state,
-                                    );
-                                } else {
-                                    let centered_width = self.tab_content_width(ui);
-                                    let x_offset =
-                                        ((ui.available_width() - centered_width).max(0.0) * 0.5)
+                                    } else {
+                                        let centered_width = self.tab_content_width(ui);
+                                        let x_offset = ((ui.available_width() - centered_width)
+                                            .max(0.0)
+                                            * 0.5)
                                             .floor();
-                                    ui.horizontal(|ui| {
-                                        if x_offset > 0.0 {
-                                            ui.add_space(x_offset);
-                                        }
-                                        ui.allocate_ui_with_layout(
-                                            Vec2::new(centered_width, 0.0),
-                                            egui::Layout::top_down(egui::Align::Min),
-                                            |ui| {
-                                                self.show_vial_tab_content(
-                                                    ui,
-                                                    macro_data_state,
-                                                    tap_dance_data_state,
-                                                )
-                                            },
-                                        );
-                                    });
-                                }
+                                        ui.horizontal(|ui| {
+                                            if x_offset > 0.0 {
+                                                ui.add_space(x_offset);
+                                            }
+                                            ui.allocate_ui_with_layout(
+                                                Vec2::new(centered_width, 0.0),
+                                                egui::Layout::top_down(egui::Align::Min),
+                                                |ui| {
+                                                    self.show_vial_tab_content(
+                                                        ui,
+                                                        macro_data_state,
+                                                        tap_dance_data_state,
+                                                    )
+                                                },
+                                            );
+                                        });
+                                    }
+                                });
                             });
-                        });
-                },
-            );
+                    },
+                );
+            });
         });
 
         if !still_open {

@@ -351,6 +351,7 @@ pub(super) fn picker_tab_button(
     style: TabStyle,
     label: &str,
     active: bool,
+    panel_id: egui::Id,
 ) -> egui::Response {
     let size = Vec2::new(picker_tab_width(label), 30.0);
     let resp = picker_button(ui, "", size, true, active);
@@ -361,6 +362,7 @@ pub(super) fn picker_tab_button(
     ui.ctx().accesskit_node_builder(resp.id, |node| {
         node.set_role(egui::accesskit::Role::Tab);
         node.set_selected(active);
+        node.set_controls(vec![panel_id.accesskit_id()]);
     });
     let rect = resp.rect;
     let (glyph_color, label_color) = if active {
