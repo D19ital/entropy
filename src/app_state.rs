@@ -5152,6 +5152,10 @@ pub struct EntropyApp {
     pub(super) linux_setup_task: Option<LinuxSetupTask>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) connect_state: ConnectState,
+    /// Running without a window (`--export-layout`): connect, snapshot, exit.
+    /// Nothing may write to the keyboard or start background bridges.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) headless: bool,
     /// Cancelled workers no longer owning the UI. Keep their endpoint reservations
     /// until completion; at most MAX_CONNECT_WORKERS including Loading may exist.
     #[cfg(not(target_arch = "wasm32"))]
@@ -5160,6 +5164,10 @@ pub struct EntropyApp {
     #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) test_connect_requests:
         Option<mpsc::Sender<(Device, mpsc::Sender<ConnectTaskMessage>)>>,
+    /// Scripted HID handle for the next real connect worker, in place of
+    /// opening the device.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) test_connect_hid: Option<crate::hid::HidDevice>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) device_scan_state: DeviceScanState,
     /// Persistent open HID device for real-time writes (Vial)
@@ -5406,6 +5414,8 @@ pub struct EntropyApp {
     /// Cached Vial lock state. `None` means the device has not answered yet.
     pub(crate) vial_unlocked: Option<bool>,
     pub(crate) vial_unlock_keys: Vec<(u8, u8)>,
+    /// An unlock-start task has been submitted; the HID command may already be in flight.
+    pub(crate) vial_unlock_session_started: bool,
     pub(crate) vial_unlock_polling: bool,
     pub(crate) vial_unlock_counter: u8,
     pub(crate) vial_unlock_best: u8,
