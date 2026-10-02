@@ -53,7 +53,6 @@ impl EntropyApp {
         layout: &KeyboardLayout,
         ctx: &egui::Context,
     ) {
-        self.leave_locked_vial_settings_tab();
         self.application_layout_editor_active = self.application_layouts_supported();
         let application_layout = self
             .application_layout_editor_active

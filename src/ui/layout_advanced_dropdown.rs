@@ -27,9 +27,6 @@ impl EntropyApp {
             let key_override_supported = !self.key_override_entries.is_empty();
             let auto_shift_supported =
                 self.auto_shift_timeout.is_some() || self.supported_qmk_settings.contains(&4);
-            let macros_enabled = self.vial_lock_allows_settings_tab(SettingsTab::Macros);
-            let tap_dance_enabled = self.vial_lock_allows_settings_tab(SettingsTab::TapDance);
-            let auto_shift_enabled = self.vial_lock_allows_settings_tab(SettingsTab::AutoShift);
             let advanced_item_count = 2
                 + macro_supported as usize
                 + tap_dance_supported as usize
@@ -117,7 +114,7 @@ impl EntropyApp {
                                         ui,
                                         item_width,
                                         crate::i18n::tr_catalog(lang, "macro_editor.title"),
-                                        macros_enabled,
+                                        true,
                                         self.main_menu_tab == MainMenuTab::Advanced
                                             && self.settings_tab == SettingsTab::Macros,
                                     )
@@ -127,7 +124,7 @@ impl EntropyApp {
                                         ui,
                                         item_width,
                                         crate::i18n::tr_catalog(lang, "tap_dance_editor.title"),
-                                        tap_dance_enabled,
+                                        true,
                                         self.main_menu_tab == MainMenuTab::Advanced
                                             && self.settings_tab == SettingsTab::TapDance,
                                     )
@@ -147,7 +144,7 @@ impl EntropyApp {
                                         ui,
                                         item_width,
                                         crate::i18n::tr(lang, TrKey::AutoShiftTitle),
-                                        auto_shift_enabled,
+                                        true,
                                         self.main_menu_tab == MainMenuTab::Advanced
                                             && self.settings_tab == SettingsTab::AutoShift,
                                     )
@@ -162,39 +159,6 @@ impl EntropyApp {
                                             && self.settings_tab == SettingsTab::KeyOverrides,
                                     )
                                 });
-                                if !macros_enabled {
-                                    if let Some(response) =
-                                        macro_resp.as_ref().filter(|response| response.hovered())
-                                    {
-                                        response.clone().on_hover_text(crate::i18n::tr_catalog(
-                                            lang,
-                                            "connection.keyboard_locked_edit_macros",
-                                        ));
-                                    }
-                                }
-                                if !tap_dance_enabled {
-                                    if let Some(response) = tap_dance_resp
-                                        .as_ref()
-                                        .filter(|response| response.hovered())
-                                    {
-                                        response.clone().on_hover_text(crate::i18n::tr_catalog(
-                                            lang,
-                                            "connection.keyboard_locked_edit_tap_dance",
-                                        ));
-                                    }
-                                }
-                                if !auto_shift_enabled {
-                                    if let Some(response) = auto_shift_resp
-                                        .as_ref()
-                                        .filter(|response| response.hovered())
-                                    {
-                                        response.clone().on_hover_text(format!(
-                                            "{} — {}",
-                                            crate::i18n::tr(lang, TrKey::KeyboardLocked),
-                                            crate::i18n::tr(lang, TrKey::AutoShiftUnlockHint),
-                                        ));
-                                    }
-                                }
                                 if text_expander_resp.clicked() {
                                     self.close_top_dropdowns(ui.ctx());
                                     self.open_text_expander_settings_page();
@@ -232,8 +196,7 @@ impl EntropyApp {
                                     .unwrap_or(false)
                                 {
                                     self.close_top_dropdowns(ui.ctx());
-                                    self.settings_tab = SettingsTab::AutoShift;
-                                    self.main_menu_tab = MainMenuTab::Advanced;
+                                    self.open_auto_shift_settings_page();
                                 }
                                 if key_override_resp
                                     .as_ref()

@@ -1,26 +1,6 @@
 use super::*;
 
 impl EntropyApp {
-    pub(super) fn vial_lock_allows_settings_tab(&self, tab: SettingsTab) -> bool {
-        !matches!(
-            tab,
-            SettingsTab::MatrixTester
-                | SettingsTab::Macros
-                | SettingsTab::TapDance
-                | SettingsTab::AutoShift
-        ) || !self.is_vial_locked()
-    }
-
-    pub(super) fn leave_locked_vial_settings_tab(&mut self) {
-        if matches!(
-            self.main_menu_tab,
-            MainMenuTab::Settings | MainMenuTab::Advanced
-        ) && !self.vial_lock_allows_settings_tab(self.settings_tab)
-        {
-            self.main_menu_tab = MainMenuTab::Keyboard;
-        }
-    }
-
     pub(super) fn draw_settings_screen(
         &mut self,
         ui: &mut egui::Ui,
@@ -264,9 +244,6 @@ impl EntropyApp {
     }
 
     pub(super) fn open_macro_settings_page(&mut self) {
-        if !self.vial_lock_allows_settings_tab(SettingsTab::Macros) {
-            return;
-        }
         self.settings_tab = SettingsTab::Macros;
         self.main_menu_tab = MainMenuTab::Advanced;
         let selected = self.keycode_picker.macro_inline_selected.unwrap_or(0).min(
@@ -276,12 +253,17 @@ impl EntropyApp {
                 .min(u8::MAX as usize) as u8,
         );
         self.keycode_picker.macro_inline_selected = Some(selected);
+        if self.is_vial_locked() {
+            self.unlock_open = true;
+            self.status_msg = crate::i18n::tr_catalog(
+                self.app_settings.language,
+                "connection.keyboard_locked_edit_macros",
+            )
+            .into();
+        }
     }
 
     pub(super) fn open_tap_dance_settings_page(&mut self) {
-        if !self.vial_lock_allows_settings_tab(SettingsTab::TapDance) {
-            return;
-        }
         self.settings_tab = SettingsTab::TapDance;
         self.main_menu_tab = MainMenuTab::Advanced;
         let selected = self.keycode_picker.tap_dance_editor_open.unwrap_or(0).min(
@@ -292,6 +274,30 @@ impl EntropyApp {
                 .min(u8::MAX as usize) as u8,
         );
         self.keycode_picker.tap_dance_editor_open = Some(selected);
+        if self.is_vial_locked() {
+            self.unlock_open = true;
+            self.status_msg = crate::i18n::tr_catalog(
+                self.app_settings.language,
+                "connection.keyboard_locked_edit_tap_dance",
+            )
+            .into();
+        }
+    }
+
+    pub(super) fn open_auto_shift_settings_page(&mut self) {
+        self.settings_tab = SettingsTab::AutoShift;
+        self.main_menu_tab = MainMenuTab::Advanced;
+        if self.is_vial_locked() {
+            self.unlock_open = true;
+            self.status_msg = format!(
+                "{} — {}",
+                crate::i18n::tr(self.app_settings.language, crate::i18n::Key::KeyboardLocked),
+                crate::i18n::tr(
+                    self.app_settings.language,
+                    crate::i18n::Key::AutoShiftUnlockHint
+                ),
+            );
+        }
     }
 
     pub(super) fn open_layer_led_settings_page(&mut self) {
@@ -361,36 +367,40 @@ mod tests {
     }
 
     #[test]
-    fn vial_lock_policy_covers_every_protected_page() {
-        let locked = vial_app(true);
-        let unlocked = vial_app(false);
-        for tab in [
-            SettingsTab::MatrixTester,
-            SettingsTab::Macros,
-            SettingsTab::TapDance,
-            SettingsTab::AutoShift,
-        ] {
-            assert!(!locked.vial_lock_allows_settings_tab(tab));
-            assert!(unlocked.vial_lock_allows_settings_tab(tab));
-        }
-        assert!(locked.vial_lock_allows_settings_tab(SettingsTab::AppSettings));
-    }
-
-    #[test]
-    fn locked_vial_rejects_alternate_macro_and_tap_dance_navigation() {
+    fn locked_vial_feature_navigation_opens_unlock_preflight() {
         let mut app = vial_app(true);
 
         app.open_macro_settings_page();
-        assert!(matches!(app.main_menu_tab, MainMenuTab::Keyboard));
+        assert!(app.main_menu_tab == MainMenuTab::Advanced);
+        assert!(app.settings_tab == SettingsTab::Macros);
+        assert!(app.unlock_open);
+        assert!(!app.vial_unlock_session_started);
+        app.dismiss_vial_unlock_preflight();
         assert!(!app.unlock_open);
 
         app.open_tap_dance_settings_page();
-        assert!(matches!(app.main_menu_tab, MainMenuTab::Keyboard));
+        assert!(app.main_menu_tab == MainMenuTab::Advanced);
+        assert!(app.settings_tab == SettingsTab::TapDance);
+        assert!(app.unlock_open);
+        assert!(!app.vial_unlock_session_started);
+    }
+
+    #[test]
+    fn unlocked_vial_feature_navigation_does_not_prompt() {
+        let mut app = vial_app(false);
+        app.open_macro_settings_page();
+        assert!(app.settings_tab == SettingsTab::Macros);
+        assert!(!app.unlock_open);
+        app.open_tap_dance_settings_page();
+        assert!(app.settings_tab == SettingsTab::TapDance);
+        assert!(!app.unlock_open);
+        app.open_auto_shift_settings_page();
+        assert!(app.settings_tab == SettingsTab::AutoShift);
         assert!(!app.unlock_open);
     }
 
     #[test]
-    fn locking_an_open_vial_feature_page_returns_to_the_keyboard() {
+    fn locked_vial_feature_page_stays_selected_during_layout_draw() {
         for (tab, menu) in [
             (SettingsTab::MatrixTester, MainMenuTab::Settings),
             (SettingsTab::Macros, MainMenuTab::Advanced),
@@ -409,8 +419,60 @@ mod tests {
                 app.draw_layout(ui, &layout, &ctx);
             });
 
-            assert!(matches!(app.main_menu_tab, MainMenuTab::Keyboard));
-            assert!(!app.unlock_open);
+            assert!(app.main_menu_tab == menu);
+            assert!(app.settings_tab == tab);
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn locked_auto_shift_navigation_prompts_again_only_on_click() {
+        let ctx = egui::Context::default();
+        let mut app = vial_app(true);
+        let (hid_device, recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        app.auto_shift_timeout = Some(175);
+
+        app.open_auto_shift_settings_page();
+        assert!(app.settings_tab == SettingsTab::AutoShift);
+        assert!(app.main_menu_tab == MainMenuTab::Advanced);
+        assert!(app.unlock_open);
+        app.dismiss_vial_unlock_preflight();
+
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.draw_auto_shift_settings_page(
+                ui,
+                egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 400.0)),
+                true,
+            );
+        });
+        assert!(!app.unlock_open);
+        assert!(recorder.requests().is_empty());
+
+        app.open_auto_shift_settings_page();
+        assert!(app.unlock_open);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn locked_vial_matrix_tester_prompts_without_polling() {
+        let ctx = egui::Context::default();
+        let mut app = vial_app(true);
+        let (hid_device, recorder) = crate::hid::HidDevice::test_device();
+        app.hid_device = Some(hid_device);
+        app.settings_tab = SettingsTab::MatrixTester;
+        app.main_menu_tab = MainMenuTab::Settings;
+        app.reset_matrix_tester_state();
+        let layout = app.layout.as_ref().unwrap().clone();
+
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let ctx = ui.ctx().clone();
+            app.draw_layout(ui, &layout, &ctx);
+        });
+
+        assert!(app.main_menu_tab == MainMenuTab::Settings);
+        assert!(app.unlock_open);
+        assert!(!app.vial_unlock_session_started);
+        assert!(recorder.requests().is_empty());
     }
 }
