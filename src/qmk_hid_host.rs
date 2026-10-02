@@ -798,6 +798,7 @@ pub struct QmkHidHostBridge {
     layout_snapshot: Arc<AtomicU8>,
     application_layout_snapshot: Arc<Mutex<crate::application_layouts::ApplicationLayoutSnapshot>>,
     application_layout_resend_generation: Arc<AtomicU64>,
+    application_layouts_enabled: Arc<AtomicBool>,
 }
 
 impl QmkHidHostBridge {
@@ -822,6 +823,7 @@ impl QmkHidHostBridge {
                 crate::application_layouts::ApplicationLayoutSnapshot::inactive(),
             )),
             application_layout_resend_generation: Arc::new(AtomicU64::new(0)),
+            application_layouts_enabled: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -913,6 +915,8 @@ impl QmkHidHostBridge {
         let worker_application_layout = application_layout_snapshot.clone();
         let application_layout_resend_generation = Arc::new(AtomicU64::new(0));
         let worker_application_layout_resend = application_layout_resend_generation.clone();
+        let application_layouts_enabled = Arc::new(AtomicBool::new(false));
+        let worker_application_layouts_enabled = application_layouts_enabled.clone();
         let send_shutdown_on_drop = Arc::new(AtomicBool::new(true));
         let worker_shutdown = send_shutdown_on_drop.clone();
         let thread = thread::spawn(move || {
@@ -924,6 +928,7 @@ impl QmkHidHostBridge {
                 worker_layout,
                 worker_application_layout,
                 worker_application_layout_resend,
+                worker_application_layouts_enabled,
                 protocol,
                 worker_shutdown,
                 desktop,
@@ -941,6 +946,7 @@ impl QmkHidHostBridge {
             layout_snapshot,
             application_layout_snapshot,
             application_layout_resend_generation,
+            application_layouts_enabled,
         }
     }
 
@@ -955,7 +961,14 @@ impl QmkHidHostBridge {
     }
 
     pub(crate) fn supports_application_layouts(&self) -> bool {
-        self.device.is_ergohaven_display_macropad()
+        self.application_layouts_enabled.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn set_selected_application_layout_support(&self, supported: bool) {
+        self.application_layouts_enabled.store(
+            supported && self.device.is_ergohaven_display_macropad(),
+            Ordering::Release,
+        );
     }
 
     /// Requests a complete transfer even if the logical profile is unchanged.
@@ -1048,6 +1061,7 @@ fn run_bridge(
     layout_snapshot: Arc<AtomicU8>,
     application_layout_snapshot: Arc<Mutex<crate::application_layouts::ApplicationLayoutSnapshot>>,
     application_layout_resend_generation: Arc<AtomicU64>,
+    application_layouts_enabled: Arc<AtomicBool>,
     mut protocol: HostProtocol,
     send_shutdown: Arc<AtomicBool>,
     desktop: HostDataService,
@@ -1057,7 +1071,6 @@ fn run_bridge(
     ) -> anyhow::Result<HostDataHid>,
 ) {
     let stop = &control.stop;
-    let application_layouts_enabled = target.is_ergohaven_display_macropad();
     let mut extended_protocol = false;
     let mut device: Option<HostDataHid> = None;
     let mut last_open_attempt = Instant::now() - Duration::from_secs(5);
@@ -1088,6 +1101,11 @@ fn run_bridge(
             if control.publish(retirement).is_err() {
                 break;
             }
+            application_layouts_enabled.store(
+                target.is_ergohaven_display_macropad()
+                    && hid.supports_application_layout_protocol(),
+                Ordering::Release,
+            );
             device = Some(HostDataHid::Dedicated(hid));
             extended_protocol = mode.time && selected_extended;
             protocol = HostProtocol::Discover;
@@ -1131,6 +1149,13 @@ fn run_bridge(
                 })
                 .ok();
             if let Some(dev) = device.as_ref() {
+                if let HostDataHid::Dedicated(hid) = dev {
+                    application_layouts_enabled.store(
+                        target.is_ergohaven_display_macropad()
+                            && hid.supports_application_layout_protocol(),
+                        Ordering::Release,
+                    );
+                }
                 extended_protocol = mode.time && protocol.extended(dev);
                 reset_layout_sync_state(&mut last_layout, &mut last_layout_full_send);
                 last_application_layout = None;
@@ -1165,13 +1190,14 @@ fn run_bridge(
             last_time = None;
             reset_layout_sync_state(&mut last_layout, &mut last_layout_full_send);
             last_application_layout = None;
+            application_layouts_enabled.store(false, Ordering::Release);
             thread::sleep(Duration::from_millis(250));
             continue;
         }
 
         let mut write_failed = false;
 
-        if application_layouts_enabled {
+        if application_layouts_enabled.load(Ordering::Acquire) {
             let resend_generation = application_layout_resend_generation.load(Ordering::SeqCst);
             if resend_generation != last_application_layout_resend_generation {
                 last_application_layout = None;
@@ -1323,6 +1349,7 @@ fn run_bridge(
             last_volume = None;
             reset_layout_sync_state(&mut last_layout, &mut last_layout_full_send);
             last_application_layout = None;
+            application_layouts_enabled.store(false, Ordering::Release);
             last_artist.clear();
             last_title.clear();
             last_media_full_send = Instant::now() - Duration::from_secs(60);
@@ -1333,7 +1360,7 @@ fn run_bridge(
 
     if send_shutdown.load(Ordering::Relaxed) {
         if let Some(device) = device.as_ref() {
-            if application_layouts_enabled {
+            if application_layouts_enabled.load(Ordering::Acquire) {
                 let packet =
                     crate::application_layouts::ApplicationLayoutSnapshot::deactivate_packet();
                 let _ = write_payload(device, &packet);
@@ -1785,6 +1812,61 @@ mod tests {
                 .application_layout_resend_generation
                 .load(Ordering::SeqCst),
             1
+        );
+    }
+
+    #[test]
+    fn unsupported_macropad_gets_clock_and_media_but_no_layout_writes() {
+        let path = tempfile::NamedTempFile::new().unwrap();
+        let target = crate::device::Device {
+            name: "M4CR0Pad v3".to_owned(),
+            vendor_id: 0xE126,
+            product_id: 0x0042,
+            manufacturer: "Ergohaven".to_owned(),
+            serial_number: "old-firmware".to_owned(),
+            bus_type: "USB".to_owned(),
+            path: path.path().to_string_lossy().into_owned(),
+            instance_token: "old-firmware".to_owned(),
+            firmware: crate::firmware::FirmwareProtocol::Vial,
+        };
+        let (hid, recorder) = crate::hid::HidDevice::test_device();
+        // Old firmware does not acknowledge the read-only E6 capability query.
+        recorder.respond_with([[0; 32]]);
+        let mut bridge = test_start_bridge(
+            target,
+            HostDataMode {
+                time: true,
+                media: true,
+                ..Default::default()
+            },
+            None,
+            Some(hid),
+            HostProtocol::Selected(false),
+            || Some(("Artist".to_owned(), "Title".to_owned())),
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let requests = recorder.requests();
+            if requests.iter().any(|packet| packet[0] == DATA_TIME)
+                && requests.iter().any(|packet| packet[0] == DATA_MEDIA_TITLE)
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "clock/media host data did not arrive"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!bridge.supports_application_layouts());
+        bridge.control.retire();
+        bridge.thread.take().unwrap().join().unwrap();
+        assert!(
+            recorder
+                .requests()
+                .iter()
+                .all(|packet| { !matches!(packet[0], 0xE1..=0xEA) || packet[0] == 0xE6 }),
+            "unsupported firmware received an application-layout write"
         );
     }
 
@@ -2718,6 +2800,7 @@ mod host_protocol_tests {
                         crate::application_layouts::ApplicationLayoutSnapshot::inactive(),
                     )),
                     Arc::new(AtomicU64::new(0)),
+                    Arc::new(AtomicBool::new(false)),
                     HostProtocol::Selected(extended),
                     Arc::new(AtomicBool::new(true)),
                     HostDataService::start(|| {
@@ -3119,6 +3202,7 @@ pub(crate) fn test_bridge_holding_transport(
                 crate::application_layouts::ApplicationLayoutSnapshot::inactive(),
             )),
             application_layout_resend_generation: Arc::new(AtomicU64::new(0)),
+            application_layouts_enabled: Arc::new(AtomicBool::new(false)),
             shared_output: None,
             control,
             thread: Some(thread),

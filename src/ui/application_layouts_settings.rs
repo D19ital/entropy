@@ -301,8 +301,8 @@ impl EntropyApp {
             app_layout_text(language, "Автопереключение", "Automatic switching"),
             true,
             Some(app_layout_text(language,
-                "OFF: фокус окна не меняет ручной выбор. ON: действуют правила приложений.",
-                "OFF: window focus does not change the manual selection. ON: application rules apply.")),
+                "OFF: фокус окна не меняет ручной выбор. ON: действуют правила приложений",
+                "OFF: window focus does not change the manual selection. ON: application rules apply")),
             metrics.value(46.0),
             |ui| {
                 crate::ui_style::settings_switch_sized_stable(
