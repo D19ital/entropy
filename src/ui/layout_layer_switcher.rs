@@ -45,8 +45,8 @@ fn layer_after_wheel(selected: usize, layer_count: usize, wheel_delta: f32) -> u
     }
 }
 
-fn layer_name_edit_is_available(hid_busy: bool, background_layers_pending: bool) -> bool {
-    !hid_busy && !background_layers_pending
+fn layer_name_edit_is_available(hid_busy: bool, selected_layer_ready: bool) -> bool {
+    !hid_busy && selected_layer_ready
 }
 
 impl EntropyApp {
@@ -309,7 +309,7 @@ impl EntropyApp {
                 #[cfg(not(target_arch = "wasm32"))]
                 let layer_name_edit_available = layer_name_edit_is_available(
                     self.hid_write_task_active(),
-                    self.deferred_device_load.next_unloaded_layer().is_some(),
+                    self.deferred_device_load.layer_status(selected).ready(),
                 );
                 #[cfg(target_arch = "wasm32")]
                 let layer_name_edit_available = true;
@@ -381,7 +381,7 @@ impl EntropyApp {
 
 #[cfg(test)]
 mod tests {
-    use crate::app::DeviceAboutInfo;
+    use crate::app::{DeferredDeviceLoadState, DeferredLoadStatus, DeviceAboutInfo, EntropyApp};
 
     use super::{
         layer_after_wheel, layer_name_edit_is_available, main_menu_battery_status,
@@ -389,10 +389,56 @@ mod tests {
     };
 
     #[test]
-    fn layer_name_edit_stays_disabled_between_background_load_steps() {
+    fn clicking_main_menu_layer_name_starts_renaming() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        app.layer_count = 2;
+        app.layer_names = vec!["Base".into(), "Fn".into()];
+        app.deferred_device_load = DeferredDeviceLoadState::complete(2);
+        app.deferred_device_load
+            .set_layer_status(1, DeferredLoadStatus::NotLoaded);
+        let pos = egui::pos2(550.0, 50.0);
+        let frame = |app: &mut EntropyApp, events| {
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1100.0, 800.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.draw_layout_layer_switcher_and_hints(ui, 0.0, 0.0, 52.0),
+            );
+        };
+        frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert_eq!(app.editing_layer, Some(0));
+        frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
+        assert_eq!(app.editing_layer, Some(0));
+        frame(&mut app, vec![egui::Event::Text("New".into())]);
+        assert_eq!(app.editing_layer, Some(0));
+        assert!(app.editing_layer_text.contains("New"));
+    }
+
+    #[test]
+    fn layer_name_edit_requires_selected_layer_but_not_all_layers() {
         assert!(!layer_name_edit_is_available(true, true));
-        assert!(!layer_name_edit_is_available(false, true));
-        assert!(layer_name_edit_is_available(false, false));
+        assert!(layer_name_edit_is_available(false, true));
+        assert!(!layer_name_edit_is_available(false, false));
         assert!(!layer_name_edit_is_available(true, false));
     }
 
