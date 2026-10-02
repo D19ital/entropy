@@ -9,6 +9,12 @@ impl EntropyApp {
         content_top: f32,
         viewport: egui::Rect,
     ) {
+        if self.settings_tab == SettingsTab::Encoders
+            && !self.show_separate_encoder_visibility_settings(layout)
+        {
+            self.settings_tab = SettingsTab::AppSettings;
+        }
+
         #[cfg(not(target_arch = "wasm32"))]
         if self.settings_tab == SettingsTab::MatrixTester {
             self.poll_matrix_tester(ctx, layout);
@@ -38,6 +44,10 @@ impl EntropyApp {
         let combo_keycap_hovered = match self.settings_tab {
             SettingsTab::AppSettings => {
                 self.draw_app_settings_page(ui, content_rect);
+                false
+            }
+            SettingsTab::ApplicationLayouts => {
+                self.draw_application_layouts_settings_page(ui, content_rect);
                 false
             }
             SettingsTab::MatrixTester => {
@@ -202,6 +212,12 @@ impl EntropyApp {
         self.main_menu_tab = MainMenuTab::Settings;
     }
 
+    pub(super) fn open_application_layouts_page(&mut self) {
+        self.application_layout_editor_active = false;
+        self.settings_tab = SettingsTab::ApplicationLayouts;
+        self.main_menu_tab = MainMenuTab::Settings;
+    }
+
     pub(super) fn open_text_expander_setup_page(&mut self) {
         self.settings_tab = SettingsTab::TextExpanderSetup;
         self.main_menu_tab = MainMenuTab::Advanced;
@@ -316,6 +332,8 @@ impl EntropyApp {
         ) && self.settings_tab != SettingsTab::MatrixTester
             && self.settings_tab != SettingsTab::TypingTrainer
             && !self.secondary_click_handled
+            && self.application_layout_rename_target_id.is_none()
+            && self.editing_layer.is_none()
             && !self.keycode_picker.has_open_modal()
             && !self.unlock_open
             && !self.vial_unlock_polling

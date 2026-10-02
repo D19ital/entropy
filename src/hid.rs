@@ -1107,6 +1107,17 @@ fn is_keymap_read_request(data: &[u8]) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn is_application_layout_capability_probe(data: &[u8]) -> bool {
+    data.starts_with(&[
+        0xE6,
+        crate::application_layouts::APPLICATION_LAYOUT_PROTOCOL_VERSION,
+        0xA5,
+        0,
+        0,
+    ])
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn is_optional_dynamic_entry_count_request(data: &[u8]) -> bool {
     data.starts_with(&[
         CMD_VIA_VIAL_PREFIX,
@@ -1138,6 +1149,7 @@ fn usb_send_max_attempts(transport: HidTransport, data: &[u8]) -> usize {
         || is_keymap_read_request(data)
         || crate::rmk_native::is_rmk_native_capabilities_request(data)
         || is_optional_dynamic_entry_count_request(data)
+        || is_application_layout_capability_probe(data)
         || data.first().is_some_and(|command| {
             // Pictogram BEGIN/DATA/COMMIT are not idempotent: replay can
             // restart storage, fail sequence checks, or reject a committed upload.
@@ -1743,6 +1755,11 @@ fn response_matches_command(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
         | CMD_VIA_LIGHTING_SAVE
         | CMD_VIA_MACRO_SET_BUFFER => resp[0] == cmd,
         CMD_VIA_VIAL_PREFIX => response_matches_vial_command(command, resp),
+        0xE6 if is_application_layout_capability_probe(command) => {
+            resp[0] == 0xE6
+                && resp[1] == crate::application_layouts::APPLICATION_LAYOUT_PROTOCOL_VERSION
+                && resp[2] == 0x5A
+        }
         // Keep reading for this command within the original deadline when a
         // delayed response from another pictogram command arrives. Never resend.
         0xC0..=0xCB => resp[0] == cmd,
@@ -2293,6 +2310,27 @@ mod tests {
             usb_send_max_attempts(HidTransport::Usb, &dynamic_entry_counts),
             1
         );
+    }
+
+    #[test]
+    fn application_layout_probe_is_optional_and_requires_live_response() {
+        let request = [
+            0xE6,
+            crate::application_layouts::APPLICATION_LAYOUT_PROTOCOL_VERSION,
+            0xA5,
+            0,
+            0,
+        ];
+        assert_eq!(usb_send_max_attempts(HidTransport::Usb, &request), 1);
+        let mut response = [0u8; MSG_LEN];
+        response[..3].copy_from_slice(&[
+            0xE6,
+            crate::application_layouts::APPLICATION_LAYOUT_PROTOCOL_VERSION,
+            0x5A,
+        ]);
+        assert!(response_matches_command(&request, &response));
+        response[2] = 0;
+        assert!(!response_matches_command(&request, &response));
     }
 
     #[test]

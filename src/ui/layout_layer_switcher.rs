@@ -53,7 +53,150 @@ fn layer_name_edit_is_available(hover_available: bool, background_layer_active: 
     hover_available && !background_layer_active
 }
 
+fn application_layout_after_step(current: usize, count: usize, step: i32) -> usize {
+    if count == 0 {
+        return 0;
+    }
+    if step < 0 {
+        current.saturating_sub(1)
+    } else if step > 0 {
+        (current + 1).min(count - 1)
+    } else {
+        current.min(count - 1)
+    }
+}
+
 impl EntropyApp {
+    fn draw_application_layout_switcher(
+        &mut self,
+        ui: &mut egui::Ui,
+        center_x: f32,
+        center_y: f32,
+    ) {
+        let options = self.application_layout_editor_options();
+        if options.is_empty() {
+            return;
+        }
+        let current_id = self
+            .application_layout_settings()
+            .map(|settings| settings.active_layout_id.clone())
+            .unwrap_or_else(|| {
+                crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID.to_owned()
+            });
+        let current_index = options
+            .iter()
+            .position(|(id, _)| id == &current_id)
+            .unwrap_or(0);
+        let current_name = options[current_index].1.clone();
+        let visible_name: String = current_name.chars().take(14).collect();
+        let selector_width = 200.0;
+        let selector_height = 34.0;
+        let selector_rect = egui::Rect::from_center_size(
+            egui::pos2(center_x, center_y),
+            egui::vec2(140.0, selector_height),
+        );
+        let left_center = egui::pos2(center_x - 86.0, center_y - 1.0);
+        let right_center = egui::pos2(center_x + 86.0, center_y - 1.0);
+        let dropdown_id = ui.make_persistent_id("layout_page_application_selector");
+        let response = ui.allocate_rect(selector_rect, Sense::click());
+        let left_rect = egui::Rect::from_center_size(left_center, egui::vec2(28.0, 34.0));
+        let right_rect = egui::Rect::from_center_size(right_center, egui::vec2(28.0, 34.0));
+        let left_response = ui.allocate_rect(left_rect, Sense::click());
+        let right_response = ui.allocate_rect(right_rect, Sense::click());
+
+        if left_response.clicked() {
+            let index = application_layout_after_step(current_index, options.len(), -1);
+            if index != current_index {
+                self.activate_application_layout(&options[index].0);
+            }
+        }
+        if right_response.clicked() {
+            let index = application_layout_after_step(current_index, options.len(), 1);
+            if index != current_index {
+                self.activate_application_layout(&options[index].0);
+            }
+        }
+        if response.clicked() {
+            egui::Popup::toggle_id(ui.ctx(), dropdown_id);
+        }
+        if response.hovered() || left_response.hovered() || right_response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+
+        let text_color = if self.dark_mode {
+            Color32::from_gray(245)
+        } else {
+            Color32::from_gray(60)
+        };
+        let disabled = if self.dark_mode {
+            Color32::from_gray(60)
+        } else {
+            Color32::from_gray(200)
+        };
+        let arrow_color = |hovered| {
+            if hovered {
+                app_accent()
+            } else if self.dark_mode {
+                Color32::from_gray(140)
+            } else {
+                Color32::from_gray(120)
+            }
+        };
+        let name_size = if visible_name.chars().count() > 11 {
+            18.0
+        } else if visible_name.chars().count() > 8 {
+            21.0
+        } else {
+            26.0
+        };
+        ui.painter().text(
+            egui::pos2(center_x, center_y),
+            egui::Align2::CENTER_CENTER,
+            visible_name,
+            FontId::proportional(name_size),
+            text_color,
+        );
+        ui.painter().text(
+            left_center,
+            egui::Align2::CENTER_CENTER,
+            "‹",
+            FontId::proportional(34.7),
+            if current_index == 0 {
+                disabled
+            } else {
+                arrow_color(left_response.hovered())
+            },
+        );
+        ui.painter().text(
+            right_center,
+            egui::Align2::CENTER_CENTER,
+            "›",
+            FontId::proportional(34.7),
+            if current_index + 1 >= options.len() {
+                disabled
+            } else {
+                arrow_color(right_response.hovered())
+            },
+        );
+
+        crate::ui_style::popup_below_widget(
+            ui,
+            dropdown_id,
+            &response,
+            egui::PopupCloseBehavior::CloseOnClickOutside,
+            |ui| {
+                ui.set_min_width(selector_width);
+                ui.spacing_mut().item_spacing = egui::vec2(0.0, 2.0);
+                for (id, name) in &options {
+                    if ui.selectable_label(id == &current_id, name).clicked() {
+                        self.activate_application_layout(id);
+                        egui::Popup::close_id(ui.ctx(), dropdown_id);
+                    }
+                }
+            },
+        );
+    }
+
     fn main_menu_battery_status(&self) -> MainMenuBatteryStatus {
         main_menu_battery_status(
             self.device_about_info
@@ -129,12 +272,20 @@ impl EntropyApp {
     ) {
         // ── Layer switcher ─────────────────────────────────────────────────
         {
-            let layer_count = self.layer_count;
+            let layer_count = if self.application_layout_editor_active {
+                crate::application_layouts::APPLICATION_LAYOUT_LAYER_COUNT
+            } else {
+                self.layer_count
+            };
             let selected = self.selected_layer;
+            let editor_layer_names = self
+                .application_layout_editor_active
+                .then(|| self.application_layout_editor_layer_names());
             // raw_name — чистое имя без префикса, хранится в layer_names
-            let raw_name = self
-                .layer_names
-                .get(selected)
+            let raw_name = editor_layer_names
+                .as_ref()
+                .and_then(|names| names.get(selected))
+                .or_else(|| self.layer_names.get(selected))
                 .cloned()
                 .unwrap_or_else(|| selected.to_string());
             let visible_raw_name: String = raw_name.chars().take(12).collect();
@@ -200,42 +351,60 @@ impl EntropyApp {
                     self.editing_layer_focus_requested = true;
                 }
                 // Commit on Enter or lost focus (click outside); cancel on Escape.
-                let commit = resp.lost_focus() || ui.input(|inp| inp.key_pressed(egui::Key::Enter));
+                let commit = resp.lost_focus()
+                    || ui.input(|inp| inp.key_pressed(egui::Key::Enter))
+                    || ui.input(|inp| inp.viewport().focused == Some(false));
                 let cancel = ui.input(|inp| inp.key_pressed(egui::Key::Escape));
+                if cancel {
+                    ui.input_mut(|input| {
+                        input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+                    });
+                }
                 if commit || cancel {
-                    if commit {
+                    if !cancel {
                         let proposed_name = self.editing_layer_text.trim().to_string();
                         if proposed_name.is_empty() {
                             self.editing_layer_text = raw_name.clone();
                         } else {
                             let new_name = proposed_name;
-                            while self.layer_names.len() <= selected {
-                                self.layer_names.push(self.layer_names.len().to_string());
-                            }
-                            self.layer_names[selected] = new_name.clone();
-                            #[cfg(not(target_arch = "wasm32"))]
-                            save_layer_names(&self.layer_names, &self.current_device_name);
-                            #[cfg(target_arch = "wasm32")]
-                            save_layer_names(&self.layer_names, "default");
-                            // Also write name back to the connected device
-                            #[cfg(not(target_arch = "wasm32"))]
-                            if self.firmware == FirmwareProtocol::Vial {
-                                if let Some(dev) = &self.hid_device {
-                                    if let Err(e) =
-                                        dev.set_qmk_setting_string(200 + selected as u16, &new_name)
-                                    {
-                                        log::warn!(
-                                            "Vial set_qmk_setting_string failed for layer {}: {}",
-                                            selected,
-                                            e
-                                        );
+                            if self.application_layout_editor_active {
+                                if let Some(layout_id) = self.editing_layer_layout_id.clone() {
+                                    self.rename_application_layout_layer(
+                                        &layout_id, selected, new_name,
+                                    );
+                                }
+                            } else {
+                                while self.layer_names.len() <= selected {
+                                    self.layer_names.push(self.layer_names.len().to_string());
+                                }
+                                self.layer_names[selected] = new_name.clone();
+                                #[cfg(not(target_arch = "wasm32"))]
+                                save_layer_names(&self.layer_names, &self.current_device_name);
+                                #[cfg(target_arch = "wasm32")]
+                                save_layer_names(&self.layer_names, "default");
+                                // Also write name back to the connected device
+                                #[cfg(not(target_arch = "wasm32"))]
+                                if self.firmware == FirmwareProtocol::Vial {
+                                    if let Some(dev) = &self.hid_device {
+                                        if let Err(e) = dev.set_qmk_setting_string(
+                                            200 + selected as u16,
+                                            &new_name,
+                                        ) {
+                                            log::warn!(
+                                                "Vial set_qmk_setting_string failed for layer {}: {}",
+                                                selected,
+                                                e
+                                            );
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                     self.editing_layer = None;
+                    self.editing_layer_text.clear();
                     self.editing_layer_focus_requested = false;
+                    self.editing_layer_layout_id = None;
                 }
             } else {
                 // Fixed arrow positions based on max 7-char name width so
@@ -311,17 +480,19 @@ impl EntropyApp {
                     self.jump_back_stack.clear();
                 }
                 #[cfg(not(target_arch = "wasm32"))]
-                let layer_name_hover_available = layer_name_hover_is_available(
-                    self.hid_user_action_busy(),
-                    self.deferred_device_load.layer_status(selected).ready(),
-                );
+                let layer_name_hover_available = self.application_layout_editor_active
+                    || layer_name_hover_is_available(
+                        self.hid_user_action_busy(),
+                        self.deferred_device_load.layer_status(selected).ready(),
+                    );
+                #[cfg(not(target_arch = "wasm32"))]
+                let layer_name_edit_available = self.application_layout_editor_active
+                    || layer_name_edit_is_available(
+                        layer_name_hover_available,
+                        self.vial_hid_background_layer_active(),
+                    );
                 #[cfg(target_arch = "wasm32")]
                 let layer_name_hover_available = true;
-                #[cfg(not(target_arch = "wasm32"))]
-                let layer_name_edit_available = layer_name_edit_is_available(
-                    layer_name_hover_available,
-                    self.vial_hid_background_layer_active(),
-                );
                 #[cfg(target_arch = "wasm32")]
                 let layer_name_edit_available = layer_name_hover_available;
                 if name_r.hovered() && layer_name_hover_available {
@@ -330,6 +501,13 @@ impl EntropyApp {
                 if name_r.clicked() && layer_name_edit_available {
                     self.editing_layer = Some(selected);
                     self.editing_layer_text = raw_name.clone();
+                    self.editing_layer_layout_id = self
+                        .application_layout_editor_active
+                        .then(|| {
+                            self.application_layout_settings()
+                                .map(|settings| settings.active_layout_id.clone())
+                        })
+                        .flatten();
                 }
 
                 // Paint
@@ -386,6 +564,9 @@ impl EntropyApp {
             }
 
             self.draw_main_menu_battery_status(ui, center_x, mid_y);
+            if self.application_layout_editor_active {
+                self.draw_application_layout_switcher(ui, center_x, mid_y + 50.0);
+            }
         }
     }
 }
@@ -395,8 +576,9 @@ mod tests {
     use crate::app::{DeferredDeviceLoadState, DeferredLoadStatus, DeviceAboutInfo, EntropyApp};
 
     use super::{
-        layer_after_wheel, layer_name_edit_is_available, layer_name_hover_is_available,
-        main_menu_battery_status, main_menu_reserves_battery_status_space, MainMenuBatteryStatus,
+        application_layout_after_step, layer_after_wheel, layer_name_edit_is_available,
+        layer_name_hover_is_available, main_menu_battery_status,
+        main_menu_reserves_battery_status_space, MainMenuBatteryStatus,
     };
 
     #[test]
@@ -446,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn layer_name_edit_requires_selected_layer_but_not_all_layers() {
+    fn layer_name_hover_requires_selected_layer_but_not_all_layers() {
         assert!(!layer_name_hover_is_available(true, true));
         assert!(layer_name_hover_is_available(false, true));
         assert!(!layer_name_hover_is_available(false, false));
@@ -516,10 +698,20 @@ mod tests {
 
     #[test]
     fn wheel_event_moves_exactly_one_layer_without_wrapping() {
-        assert_eq!(layer_after_wheel(0, 6, -120.0), 1);
-        assert_eq!(layer_after_wheel(1, 6, 120.0), 0);
-        assert_eq!(layer_after_wheel(5, 6, -120.0), 5);
-        assert_eq!(layer_after_wheel(0, 6, 120.0), 0);
+        assert_eq!(layer_after_wheel(0, 16, -120.0), 1);
+        assert_eq!(layer_after_wheel(1, 16, 120.0), 0);
+        assert_eq!(layer_after_wheel(14, 16, -120.0), 15);
+        assert_eq!(layer_after_wheel(15, 16, -120.0), 15);
+        assert_eq!(layer_after_wheel(0, 16, 120.0), 0);
+    }
+
+    #[test]
+    fn application_layout_arrows_do_not_wrap() {
+        assert_eq!(application_layout_after_step(0, 3, -1), 0);
+        assert_eq!(application_layout_after_step(0, 3, 1), 1);
+        assert_eq!(application_layout_after_step(2, 3, 1), 2);
+        assert_eq!(application_layout_after_step(2, 3, -1), 1);
+        assert_eq!(application_layout_after_step(0, 0, 1), 0);
     }
 
     #[test]

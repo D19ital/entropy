@@ -37,6 +37,18 @@ pub(crate) struct SavedPictogram {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct AppSettings {
+    /// Per-device application layouts. Kept in Entropy settings so the base
+    /// Vial keymap remains the reliable fallback when Entropy is not running.
+    #[serde(default)]
+    pub(crate) application_layouts:
+        std::collections::BTreeMap<String, crate::application_layouts::DeviceApplicationLayouts>,
+    /// Last Macropad application-layout profile opened by the user. Keeping
+    /// this small identity lets Entropy continue resolving foreground apps and
+    /// editing saved profiles while the USB device is temporarily offline.
+    #[serde(default)]
+    pub(crate) last_application_layout_device_key: Option<String>,
+    #[serde(default)]
+    pub(crate) last_application_layout_device_name: Option<String>,
     #[serde(default)]
     pub(crate) minimize_to_tray_on_close: bool,
     #[serde(default)]
@@ -190,6 +202,9 @@ pub(crate) fn clamp_ui_scale(scale: f32) -> f32 {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            application_layouts: std::collections::BTreeMap::new(),
+            last_application_layout_device_key: None,
+            last_application_layout_device_name: None,
             minimize_to_tray_on_close: false,
             close_to_tray_behavior: CloseToTrayBehavior::Ask,
             launch_at_startup: false,
@@ -476,6 +491,7 @@ pub(crate) struct DeviceAboutInfo {
     pub(crate) product_id: u16,
     pub(crate) path: String,
     pub(crate) firmware_version: Option<String>,
+    pub(crate) supports_application_layouts: bool,
     pub(crate) firmware_update_target: Option<FirmwareReleaseTarget>,
     pub(crate) supports_battery_halves: bool,
     pub(crate) battery_halves: Option<crate::hid::BatteryHalves>,
@@ -3190,6 +3206,13 @@ pub(crate) fn is_alt_repeat_keycode(kc: u16) -> bool {
 
 #[derive(Clone, Debug)]
 pub(super) enum UndoAction {
+    ApplicationLayoutControl {
+        device_key: String,
+        layout_id: String,
+        layer: usize,
+        control: usize,
+        old_keycode: u16,
+    },
     Key {
         layer: usize,
         key_idx: usize,
@@ -3254,6 +3277,7 @@ pub(crate) enum ComboPickField {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingsTab {
     AppSettings,
+    ApplicationLayouts,
     MatrixTester,
     TextExpanderSetup,
     TextExpander,
@@ -5188,6 +5212,39 @@ pub struct EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) qmk_hid_hosts:
         std::collections::HashMap<String, crate::qmk_hid_host::QmkHidHostBridge>,
+    /// True while the normal keyboard canvas edits the selected application
+    /// layout instead of writing the permanent Vial keymap.
+    pub(crate) application_layout_editor_active: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) application_discovery: crate::app_discovery::ApplicationDiscoverySnapshot,
+    #[cfg(target_os = "linux")]
+    pub(crate) gnome_integration_install_task:
+        Option<crate::app_discovery::GnomeIntegrationInstallTask>,
+    #[cfg(target_os = "linux")]
+    pub(crate) gnome_integration_install_result:
+        Option<Result<crate::app_discovery::GnomeIntegrationInstallReport, String>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) application_layout_foreground:
+        Option<crate::application_layouts::DetectedApplication>,
+    /// A layout selected from the main Layout page stays active until focus
+    /// moves to a different application. Store both the device and foreground
+    /// application captured at selection time so polling the same window
+    /// cannot immediately undo the user's choice.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) application_layout_manual_override: Option<(
+        String,
+        Option<crate::application_layouts::DetectedApplication>,
+    )>,
+    pub(crate) application_picker_open: bool,
+    pub(crate) application_picker_assign_existing: bool,
+    /// Stable profile selected when the edit dialog opens. Foreground changes
+    /// must not redirect the dialog to another profile before Save is clicked.
+    pub(crate) application_picker_target_layout_id: Option<String>,
+    pub(crate) application_picker_search: String,
+    pub(crate) application_picker_selected: Option<crate::application_layouts::DetectedApplication>,
+    pub(crate) application_layout_rename_focus_requested: bool,
+    pub(crate) application_layout_rename_target_id: Option<String>,
+    pub(crate) application_layout_rename_value: String,
     /// Current firmware type (mirrors layout.firmware)
     pub(crate) firmware: FirmwareProtocol,
     /// QMK setting ids the connected firmware exposes (from the connect probe).
@@ -5335,6 +5392,10 @@ pub struct EntropyApp {
     pub(crate) editing_layer: Option<usize>, // layer being renamed
     pub(crate) editing_layer_text: String,
     pub(crate) editing_layer_focus_requested: bool,
+    /// Stable application-layout id captured when layer-name editing starts.
+    /// Foreground application changes must never redirect the draft to the
+    /// newly selected profile.
+    pub(crate) editing_layer_layout_id: Option<String>,
     /// Current connected device name (for per-device layer names)
     pub(crate) current_device_name: String,
     /// Stable Vial keyboard id for the current firmware definition, when available.

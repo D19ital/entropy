@@ -1206,6 +1206,7 @@ impl EntropyApp {
                     );
                 }
                 self.device_about_info = Some(r.about_info.clone());
+                self.remember_connected_application_layout_device();
                 if staged_bluetooth_load {
                     self.schedule_initial_battery_refresh();
                 } else {
@@ -1428,6 +1429,11 @@ impl EntropyApp {
                     if !self.headless {
                         self.restore_entropy_display_preset_after_connect();
                         self.sync_qmk_hid_host_bridges();
+                        // USB reconnect can restore the same logical profile while
+                        // firmware has lost its volatile host-side layout. Publish
+                        // the current snapshot and explicitly request a full resend.
+                        self.update_application_layout_runtime();
+                        self.force_current_application_layout_resend();
                     }
                 }
 

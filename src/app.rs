@@ -73,6 +73,10 @@ mod alt_repeat_settings_ui;
 mod app_lifecycle;
 #[path = "ui/app_settings.rs"]
 mod app_settings_ui;
+#[path = "ui/application_layout_runtime.rs"]
+mod application_layout_runtime;
+#[path = "ui/application_layouts_settings.rs"]
+mod application_layouts_settings_ui;
 #[path = "ui/auto_shift_settings.rs"]
 mod auto_shift_settings_ui;
 #[path = "ui/bluetooth_settings.rs"]

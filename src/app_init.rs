@@ -120,6 +120,25 @@ impl EntropyApp {
             settings_write_generation: 0,
             #[cfg(not(target_arch = "wasm32"))]
             qmk_hid_hosts: std::collections::HashMap::new(),
+            application_layout_editor_active: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            application_discovery: Default::default(),
+            #[cfg(target_os = "linux")]
+            gnome_integration_install_task: None,
+            #[cfg(target_os = "linux")]
+            gnome_integration_install_result: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            application_layout_foreground: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            application_layout_manual_override: None,
+            application_picker_open: false,
+            application_picker_assign_existing: false,
+            application_picker_target_layout_id: None,
+            application_picker_search: String::new(),
+            application_picker_selected: None,
+            application_layout_rename_focus_requested: false,
+            application_layout_rename_target_id: None,
+            application_layout_rename_value: String::new(),
             pending_device_connect: None,
             #[cfg(not(target_arch = "wasm32"))]
             headless: false,
@@ -277,6 +296,7 @@ impl EntropyApp {
             editing_layer: None,
             editing_layer_text: String::new(),
             editing_layer_focus_requested: false,
+            editing_layer_layout_id: None,
             current_device_name: String::new(),
             current_keyboard_id: None,
             current_encoder_visibility_id: String::new(),
