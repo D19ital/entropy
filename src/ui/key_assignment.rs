@@ -218,7 +218,7 @@ impl EntropyApp {
         self.keycode_picker.result = None;
         self.keycode_picker
             .rmk_native_key_actions_allowed_for_target = key_target.is_some();
-        self.keycode_picker.search_query.clear();
+        self.keycode_picker.reset_search();
         self.keycode_picker.layer_names = if self.application_layout_editor_active {
             self.application_layout_editor_layer_names()
         } else {
