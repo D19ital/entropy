@@ -193,11 +193,23 @@ impl EntropyApp {
             if !self.application_layouts_supported() {
                 ui.vertical_centered(|ui| {
                     ui.add_space(metrics.value(150.0));
-                    ui.label(app_layout_text(
-                        language,
-                        "Подключите Macropad, чтобы настроить раскладки приложений.",
-                        "Connect Macropad to configure application layouts.",
-                    ));
+                    let macropad_connected = self
+                        .selected_device
+                        .and_then(|index| self.device_manager.devices().get(index))
+                        .is_some_and(super::application_layout_runtime::device_supports_application_layouts);
+                    ui.label(if macropad_connected {
+                        app_layout_text(
+                            language,
+                            "Установленная прошивка Macropad не поддерживает раскладки приложений. Обновите прошивку и переподключите устройство.",
+                            "The installed Macropad firmware does not support application layouts. Update the firmware and reconnect the device.",
+                        )
+                    } else {
+                        app_layout_text(
+                            language,
+                            "Подключите Macropad, чтобы настроить раскладки приложений.",
+                            "Connect Macropad to configure application layouts.",
+                        )
+                    });
                 });
                 return;
             }

@@ -1,6 +1,6 @@
 use super::*;
 
-fn device_supports_application_layouts(device: &crate::device::Device) -> bool {
+pub(super) fn device_supports_application_layouts(device: &crate::device::Device) -> bool {
     device.firmware == FirmwareProtocol::Vial && device.is_ergohaven_display_macropad()
 }
 
@@ -9,7 +9,15 @@ impl EntropyApp {
         let device = self
             .selected_device
             .and_then(|index| self.device_manager.devices().get(index))
-            .filter(|device| device_supports_application_layouts(device))?;
+            .filter(|device| {
+                device_supports_application_layouts(device)
+                    && self.device_about_info.as_ref().is_some_and(|info| {
+                        info.supports_application_layouts
+                            && info.vendor_id == device.vendor_id
+                            && info.product_id == device.product_id
+                            && info.path == device.path
+                    })
+            })?;
         // v2 and v3 currently advertise the same Vial UID, but their
         // application profiles must not overwrite one another. Keep the
         // original v3 key so existing v3 profiles remain available.
@@ -712,6 +720,17 @@ mod tests {
         }
     }
 
+    fn mark_application_layout_protocol_supported(app: &mut EntropyApp) {
+        let device = &app.device_manager.devices()[app.selected_device.unwrap()];
+        app.device_about_info = Some(DeviceAboutInfo {
+            supports_application_layouts: true,
+            vendor_id: device.vendor_id,
+            product_id: device.product_id,
+            path: device.path.clone(),
+            ..Default::default()
+        });
+    }
+
     #[test]
     fn corrupt_product_string_does_not_hide_application_layouts() {
         let device = crate::device::Device {
@@ -781,11 +800,21 @@ mod tests {
         app.current_keyboard_id = Some(0xBB17F05B02801D1D);
         app.device_manager.replace_devices(vec![device.clone()]);
         app.selected_device = Some(0);
+        assert!(app.application_layout_device_key().is_none());
+        app.device_about_info = Some(DeviceAboutInfo {
+            supports_application_layouts: true,
+            vendor_id: device.vendor_id,
+            product_id: device.product_id,
+            path: device.path.clone(),
+            ..Default::default()
+        });
         let v3_key = app.application_layout_device_key().unwrap();
         assert_eq!(v3_key, "vial-bb17f05b02801d1d");
 
         device.product_id = 0x0041;
-        app.device_manager.replace_devices(vec![device]);
+        app.device_manager.replace_devices(vec![device.clone()]);
+        assert!(app.application_layout_device_key().is_none());
+        app.device_about_info.as_mut().unwrap().product_id = device.product_id;
         let v2_key = app.application_layout_device_key().unwrap();
         assert_eq!(v2_key, "vial-bb17f05b02801d1d-m4cr0pad-v2");
         assert_ne!(v2_key, v3_key);
@@ -998,6 +1027,7 @@ mod tests {
             .replace_devices(vec![m4cr0pad_v3_device()]);
         app.selected_device = Some(0);
         app.current_device_name = "M4CR0Pad v3".to_owned();
+        mark_application_layout_protocol_supported(&mut app);
         app.selected_layer = 7;
         app.application_discovery.foreground =
             Some(crate::application_layouts::DetectedApplication {
@@ -1052,6 +1082,7 @@ mod tests {
             .replace_devices(vec![m4cr0pad_v3_device()]);
         app.selected_device = Some(0);
         app.current_device_name = "M4CR0Pad v3".to_owned();
+        mark_application_layout_protocol_supported(&mut app);
 
         let device_key = app.application_layout_device_key().unwrap();
         let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
@@ -1162,6 +1193,7 @@ mod tests {
             .replace_devices(vec![m4cr0pad_v3_device()]);
         app.selected_device = Some(0);
         app.current_device_name = "M4CR0Pad v3".to_owned();
+        mark_application_layout_protocol_supported(&mut app);
 
         let device_key = app
             .application_layout_device_key()
