@@ -29,6 +29,21 @@ impl EntropyApp {
             self.app_settings.language,
             "status_messages.device_unlock_cancelled",
         ));
+        // A protected feature selected from the menus must not become visible
+        // merely because the preflight overlay was dismissed. Keep its selection
+        // for a later explicit click, but return to the keyboard canvas now.
+        if matches!(
+            self.main_menu_tab,
+            MainMenuTab::Advanced | MainMenuTab::Settings
+        ) && matches!(
+            self.settings_tab,
+            SettingsTab::MatrixTester
+                | SettingsTab::Macros
+                | SettingsTab::TapDance
+                | SettingsTab::AutoShift
+        ) {
+            self.main_menu_tab = MainMenuTab::Keyboard;
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -501,6 +516,51 @@ mod tests {
         assert!(!app.unlock_open);
         assert!(app.vial_hid_task.is_none());
         assert!(recorder.requests().is_empty());
+    }
+
+    #[test]
+    fn cancelling_locked_feature_navigation_returns_to_keyboard() {
+        for tab in [
+            SettingsTab::Macros,
+            SettingsTab::TapDance,
+            SettingsTab::AutoShift,
+            SettingsTab::MatrixTester,
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = EntropyApp::new_inert_for_test();
+            let (hid, recorder) = crate::hid::HidDevice::test_device();
+            app.hid_device = Some(hid);
+            app.firmware = FirmwareProtocol::Vial;
+            app.vial_unlocked = Some(false);
+            app.settings_tab = tab;
+            app.main_menu_tab = if tab == SettingsTab::MatrixTester {
+                MainMenuTab::Settings
+            } else {
+                MainMenuTab::Advanced
+            };
+            app.unlock_open = true;
+
+            click_preflight_button(&mut app, &ctx, false);
+            assert!(!app.unlock_open);
+            assert!(app.main_menu_tab == MainMenuTab::Keyboard);
+            assert!(app.settings_tab == tab);
+            assert_eq!(app.vial_unlocked, Some(false));
+            assert!(recorder.requests().is_empty());
+        }
+    }
+
+    #[test]
+    fn cancelling_direct_unlock_does_not_change_unrelated_page() {
+        let mut app = EntropyApp::new_inert_for_test();
+        app.firmware = FirmwareProtocol::Vial;
+        app.main_menu_tab = MainMenuTab::Settings;
+        app.settings_tab = SettingsTab::AboutDevice;
+        app.unlock_open = true;
+
+        app.dismiss_vial_unlock_preflight();
+        assert!(!app.unlock_open);
+        assert!(app.main_menu_tab == MainMenuTab::Settings);
+        assert!(app.settings_tab == SettingsTab::AboutDevice);
     }
 
     #[test]
