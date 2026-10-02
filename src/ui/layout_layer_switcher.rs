@@ -573,13 +573,59 @@ impl EntropyApp {
 
 #[cfg(test)]
 mod tests {
-    use crate::app::DeviceAboutInfo;
+    use crate::app::{DeferredDeviceLoadState, DeferredLoadStatus, DeviceAboutInfo, EntropyApp};
 
     use super::{
         application_layout_after_step, layer_after_wheel, layer_name_edit_is_available,
         layer_name_hover_is_available, main_menu_battery_status,
         main_menu_reserves_battery_status_space, MainMenuBatteryStatus,
     };
+
+    #[test]
+    fn clicking_main_menu_layer_name_starts_renaming() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        app.layer_count = 2;
+        app.layer_names = vec!["Base".into(), "Fn".into()];
+        app.deferred_device_load = DeferredDeviceLoadState::complete(2);
+        app.deferred_device_load
+            .set_layer_status(1, DeferredLoadStatus::NotLoaded);
+        let pos = egui::pos2(550.0, 50.0);
+        let frame = |app: &mut EntropyApp, events| {
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1100.0, 800.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.draw_layout_layer_switcher_and_hints(ui, 0.0, 0.0, 52.0),
+            );
+        };
+        frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert_eq!(app.editing_layer, Some(0));
+        frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
+        assert_eq!(app.editing_layer, Some(0));
+        frame(&mut app, vec![egui::Event::Text("New".into())]);
+        assert_eq!(app.editing_layer, Some(0));
+        assert!(app.editing_layer_text.contains("New"));
+    }
 
     #[test]
     fn layer_name_hover_requires_selected_layer_but_not_all_layers() {
@@ -595,6 +641,8 @@ mod tests {
         assert!(ready_hover);
         assert!(layer_name_edit_is_available(ready_hover, false));
         assert!(!layer_name_edit_is_available(ready_hover, true));
+        // The hover state remains true in both frames while the serialized HID
+        // reader alternates between active requests and short idle intervals.
         assert!(layer_name_hover_is_available(false, true));
     }
 
