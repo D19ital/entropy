@@ -222,7 +222,13 @@ impl EntropyApp {
                     );
 
                     let center_x = screen.center().x;
-                    let top_y = screen.min.y + 40.0;
+                    // Center the preflight title, text, and buttons as a group.
+                    // Leave the active unlock layout in its existing position.
+                    let top_y = if preflight {
+                        screen.center().y - 80.0
+                    } else {
+                        screen.min.y + 40.0
+                    };
 
                     // Title
                     ui.painter().text(
@@ -436,7 +442,7 @@ mod tests {
     fn click_preflight_button(app: &mut EntropyApp, ctx: &egui::Context, start: bool) {
         frame(app, ctx, Vec::new());
         // The preflight row is centered in the 1100px test viewport.
-        let pos = egui::pos2(if start { 600.0 } else { 480.0 }, 200.0);
+        let pos = egui::pos2(if start { 600.0 } else { 480.0 }, 480.0);
         frame(app, ctx, vec![egui::Event::PointerMoved(pos)]);
         for pressed in [true, false] {
             frame(
