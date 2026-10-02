@@ -2342,6 +2342,19 @@ mod tests {
     }
 
     #[test]
+    fn installed_catalog_matches_presets_without_running_windows() {
+        let audacity = parse_desktop_entry_with_id(
+            "[Desktop Entry]\nType=Application\nName=Audacity\nExec=/usr/bin/audacity %F\n",
+            Some("org.audacityteam.Audacity.desktop"),
+        )
+        .unwrap();
+        let found = match_builtin_presets_from_catalog(&[audacity]);
+        assert!(found.contains("audacity"));
+        assert!(!found.contains("visual_studio_code"));
+        assert!(!found.contains("figma"));
+    }
+
+    #[test]
     fn desktop_metadata_supplies_generic_runtime_identities() {
         let application = parse_desktop_entry_with_id(
             "[Desktop Entry]\nType=Application\nName=Example Paint\nExec=/opt/example/bin/example-paint %F\nTryExec=example-paint\nStartupWMClass=ExamplePaint\n",
@@ -2813,4 +2826,178 @@ mod tests {
             (writer.xlib.XFlush)(writer.display);
         }
     }
+}
+
+/// System installation scan, separate from the running-window picker. An error
+/// means detection unavailable, never "not installed".
+pub(crate) fn installed_builtin_presets() -> Result<std::collections::BTreeSet<String>, String> {
+    static INSTALLED: OnceLock<Result<std::collections::BTreeSet<String>, String>> =
+        OnceLock::new();
+    INSTALLED
+        .get_or_init(scan_installed_builtin_presets)
+        .clone()
+}
+
+#[cfg(target_os = "linux")]
+fn scan_installed_builtin_presets() -> Result<std::collections::BTreeSet<String>, String> {
+    let mut roots = Vec::new();
+    if let Some(data_home) = std::env::var_os("XDG_DATA_HOME") {
+        roots.push(PathBuf::from(data_home));
+    } else if let Some(home) = std::env::var_os("HOME") {
+        roots.push(PathBuf::from(home).join(".local/share"));
+    }
+    roots.extend(std::env::split_paths(
+        &std::env::var_os("XDG_DATA_DIRS").unwrap_or_else(|| "/usr/local/share:/usr/share".into()),
+    ));
+    if !roots
+        .iter()
+        .any(|root| std::fs::read_dir(root.join("applications")).is_ok())
+    {
+        return Err("No readable desktop application catalog".to_owned());
+    }
+    Ok(match_builtin_presets_from_catalog(&linux_installed_apps()))
+}
+
+#[cfg(target_os = "linux")]
+fn match_builtin_presets_from_catalog(
+    catalog: &[DetectedApplication],
+) -> std::collections::BTreeSet<String> {
+    let mut found = std::collections::BTreeSet::new();
+    for preset in crate::application_layouts::builtin_application_layout_presets() {
+        let matches = catalog.iter().any(|application| {
+            crate::application_layouts::executables_match(
+                preset.executable,
+                &application.executable,
+            ) || crate::application_layouts::application_identities_match(
+                std::iter::once(preset.executable).chain(preset.identities.iter().copied()),
+                std::iter::once(application.executable.as_str())
+                    .chain(application.identities.iter().map(String::as_str)),
+            )
+        });
+        if matches {
+            found.insert(preset.id.to_owned());
+        }
+    }
+    found
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn scan_installed_builtin_presets() -> Result<std::collections::BTreeSet<String>, String> {
+    use std::path::{Path, PathBuf};
+    let mut roots: Vec<PathBuf> = Vec::new();
+    #[cfg(target_os = "windows")]
+    {
+        for key in ["ProgramFiles", "ProgramFiles(x86)"] {
+            if let Some(root) = std::env::var_os(key) {
+                roots.push(PathBuf::from(root));
+            }
+        }
+        if let Some(root) = std::env::var_os("LOCALAPPDATA") {
+            roots.push(PathBuf::from(root).join("Programs"));
+        }
+        for key in ["APPDATA", "PROGRAMDATA"] {
+            if let Some(root) = std::env::var_os(key) {
+                roots.push(PathBuf::from(root).join("Microsoft/Windows/Start Menu/Programs"));
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        roots.push(PathBuf::from("/Applications"));
+        roots.push(PathBuf::from("/System/Applications"));
+        if let Some(home) = std::env::var_os("HOME") {
+            roots.push(PathBuf::from(home).join("Applications"));
+        }
+    }
+    let mut names = std::collections::BTreeSet::new();
+    let mut readable = false;
+    fn collect(
+        dir: &Path,
+        depth: usize,
+        names: &mut std::collections::BTreeSet<String>,
+        readable: &mut bool,
+    ) {
+        if depth > 5 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        *readable = true;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            let stem = Path::new(&name)
+                .file_stem()
+                .and_then(|part| part.to_str())
+                .unwrap_or("");
+            let ext = path
+                .extension()
+                .and_then(|part| part.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if matches!(ext.as_str(), "exe" | "lnk" | "app") {
+                names.insert(
+                    stem.chars()
+                        .filter(|ch| ch.is_ascii_alphanumeric())
+                        .collect(),
+                );
+            }
+            if path.is_dir() && ext != "app" {
+                collect(&path, depth + 1, names, readable);
+            }
+        }
+    }
+    for root in roots {
+        collect(&root, 0, &mut names, &mut readable);
+    }
+    if !readable {
+        return Err("No readable system application directories".to_owned());
+    }
+    let mut found = std::collections::BTreeSet::new();
+    for preset in crate::application_layouts::builtin_application_layout_presets() {
+        let aliases: &[&str] = match preset.id {
+            "obs_studio" => &["obs", "obs64", "obsstudio"],
+            "visual_studio_code" => &["code", "visualstudiocode"],
+            "blender" => &["blender"],
+            "figma" => &["figma"],
+            "adobe_photoshop" => &["photoshop", "adobephotoshop"],
+            "audacity" => &["audacity"],
+            "firefox" => &["firefox", "mozillafirefox"],
+            "google_chrome" => &["chrome", "googlechrome"],
+            "adobe_premiere_pro" => &["adobepremierepro", "premierepro"],
+            "adobe_illustrator" => &["illustrator", "adobeillustrator"],
+            "visual_studio" => &["devenv", "microsoftvisualstudio"],
+            "intellij_idea" => &["idea64", "intellijidea"],
+            "pycharm" => &["pycharm64", "pycharm"],
+            "discord" => &["discord"],
+            "streamlabs_desktop" => &["streamlabsdesktop", "streamlabsobs", "slobs"],
+            _ => &[],
+        };
+        let versioned_name = match preset.id {
+            "adobe_photoshop" => Some("adobephotoshop"),
+            "adobe_premiere_pro" => Some("adobepremierepro"),
+            "adobe_illustrator" => Some("adobeillustrator"),
+            "visual_studio" => Some("microsoftvisualstudio"),
+            "intellij_idea" => Some("intellijidea"),
+            "pycharm" => Some("pycharm"),
+            _ => None,
+        };
+        if aliases.iter().any(|alias| names.contains(*alias))
+            || versioned_name.is_some_and(|prefix| {
+                names.iter().any(|name| {
+                    name.starts_with(prefix)
+                        && name[prefix.len()..].chars().all(|ch| ch.is_ascii_digit())
+                })
+            })
+        {
+            found.insert(preset.id.to_owned());
+        }
+    }
+    Ok(found)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+fn scan_installed_builtin_presets() -> Result<std::collections::BTreeSet<String>, String> {
+    Err("System application catalog unsupported on this platform".to_owned())
 }

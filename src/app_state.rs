@@ -3205,6 +3205,13 @@ pub(crate) fn is_alt_repeat_keycode(kc: u16) -> bool {
 
 #[derive(Clone, Debug)]
 pub(super) enum UndoAction {
+    ApplicationLayoutControl {
+        device_key: String,
+        layout_id: String,
+        layer: usize,
+        control: usize,
+        old_keycode: u16,
+    },
     Key {
         layer: usize,
         key_idx: usize,

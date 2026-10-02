@@ -2,6 +2,7 @@ use crate::firmware::FirmwareProtocol;
 
 const ERGOHAVEN_VENDOR_ID: u16 = 0xE126;
 const ERGOHAVEN_DISPLAY_MACROPAD_PRODUCT_IDS: [u16; 2] = [0x0041, 0x0042];
+const M4CR0PAD_V2_PRODUCT_ID: u16 = 0x0041;
 const M4CR0PAD_V3_PRODUCT_ID: u16 = 0x0042;
 const K04_QUBE_PRODUCT_ID_START: u16 = 0x0071;
 const K04_QUBE_PRODUCT_ID_END: u16 = 0x0073;
@@ -332,11 +333,15 @@ impl Device {
     pub fn display_name_with_transport(&self, display_name: &str) -> String {
         // Keep the firmware-reported model name for storage and device identity,
         // but expose the short product name requested by the desktop UI.
-        if self.is_m4cr0pad_v3() {
-            return "Macropad".to_owned();
+        if self.vendor_id == ERGOHAVEN_VENDOR_ID {
+            match self.product_id {
+                M4CR0PAD_V2_PRODUCT_ID => return "Macropad v2".to_owned(),
+                M4CR0PAD_V3_PRODUCT_ID => return "Macropad".to_owned(),
+                _ => {}
+            }
         }
         // Linux can occasionally expose a truncated USB product string. The
-        // assigned VID/PID is the stable identity for M4CR0Pad v3.
+        // assigned VID/PID is the stable identity for both Macropad revisions.
         let display_name = display_name.trim();
         if self.is_bluetooth_transport() {
             format!("{display_name} (Bluetooth)")
@@ -823,6 +828,16 @@ mod tests {
             device.display_name_with_transport("Ergohaven K:04"),
             "Ergohaven K:04 (USB)"
         );
+    }
+
+    #[test]
+    fn m4cr0pad_v2_uses_revision_name_when_usb_product_string_is_corrupt() {
+        let mut device = test_device("Usb", "/dev/hidraw4");
+        device.name = "Ль".to_owned();
+        device.vendor_id = ERGOHAVEN_VENDOR_ID;
+        device.product_id = M4CR0PAD_V2_PRODUCT_ID;
+
+        assert_eq!(device.display_name_with_transport(&device.name), "Macropad v2");
     }
 
     #[test]

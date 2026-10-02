@@ -955,7 +955,7 @@ impl QmkHidHostBridge {
     }
 
     pub(crate) fn supports_application_layouts(&self) -> bool {
-        self.device.is_m4cr0pad_v3()
+        self.device.is_ergohaven_display_macropad()
     }
 
     /// Requests a complete transfer even if the logical profile is unchanged.
@@ -1057,7 +1057,7 @@ fn run_bridge(
     ) -> anyhow::Result<HostDataHid>,
 ) {
     let stop = &control.stop;
-    let application_layouts_enabled = target.is_m4cr0pad_v3();
+    let application_layouts_enabled = target.is_ergohaven_display_macropad();
     let mut extended_protocol = false;
     let mut device: Option<HostDataHid> = None;
     let mut last_open_attempt = Instant::now() - Duration::from_secs(5);
@@ -1334,12 +1334,9 @@ fn run_bridge(
     if send_shutdown.load(Ordering::Relaxed) {
         if let Some(device) = device.as_ref() {
             if application_layouts_enabled {
-                for packet in
-                    crate::application_layouts::ApplicationLayoutSnapshot::inactive().packets()
-                {
-                    let _ = write_payload(device, &packet);
-                    thread::sleep(Duration::from_millis(1));
-                }
+                let packet =
+                    crate::application_layouts::ApplicationLayoutSnapshot::deactivate_packet();
+                let _ = write_payload(device, &packet);
             }
             send_shutdown_payloads(device, mode, extended_protocol);
         } else if let Some(output) = shared_output.as_ref() {

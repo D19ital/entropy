@@ -224,12 +224,14 @@ impl EntropyApp {
         let Some(key) = self.application_layout_device_key() else {
             return;
         };
-        let changed = self
+        let installed_presets = crate::app_discovery::installed_builtin_presets();
+        let settings = self
             .app_settings
             .application_layouts
             .entry(key)
-            .or_default()
-            .normalize();
+            .or_default();
+        let mut changed = settings.normalize();
+        changed |= settings.provision_builtin_presets(installed_presets.as_ref().ok());
         if changed {
             save_app_settings(&self.app_settings);
         }
@@ -271,6 +273,7 @@ impl EntropyApp {
             .map(|layout| layout.name.clone())
             .unwrap_or_else(|| "Default".to_owned());
         let mut automatically_return_to_default = snapshot.automatically_return_to_default;
+        let mut automatic_switching_enabled = snapshot.automatic_switching_enabled;
 
         let row_width = metrics.value(602.0);
         let row_height = metrics.settings_row_height();
@@ -278,6 +281,26 @@ impl EntropyApp {
         let control_height = metrics.settings_control_height();
         let control_font = metrics.settings_control_font_size();
         ui.spacing_mut().item_spacing.y = 0.0;
+
+        crate::ui_style::settings_list_row_with_tooltip(
+            ui,
+            row_width,
+            row_height,
+            app_layout_text(language, "Автопереключение", "Automatic switching"),
+            true,
+            Some(app_layout_text(language,
+                "OFF: фокус окна не меняет ручной выбор. ON: действуют правила приложений.",
+                "OFF: window focus does not change the manual selection. ON: application rules apply.")),
+            metrics.value(46.0),
+            |ui| {
+                crate::ui_style::settings_switch_sized_stable(
+                    ui,
+                    "application_layout_master_automatic_switching",
+                    &mut automatic_switching_enabled,
+                    metrics.size(46.0, 24.0),
+                );
+            },
+        );
 
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
@@ -312,6 +335,10 @@ impl EntropyApp {
         let mut changed = false;
         let mut deleted_layout = false;
         if let Some(settings) = self.app_settings.application_layouts.get_mut(&device_key) {
+            if settings.automatic_switching_enabled != automatic_switching_enabled {
+                settings.automatic_switching_enabled = automatic_switching_enabled;
+                changed = true;
+            }
             if settings.automatically_return_to_default != automatically_return_to_default {
                 settings.automatically_return_to_default = automatically_return_to_default;
                 changed = true;
@@ -362,7 +389,7 @@ impl EntropyApp {
             ui,
             row_width,
             row_height,
-            app_layout_text(language, "Название раскладки", "Layout name"),
+            app_layout_text(language, "Раскладка", "Layout"),
             true,
             Some(layout_selector_tooltip),
             control_width,
@@ -390,7 +417,7 @@ impl EntropyApp {
                                     &mut self.application_layout_rename_value,
                                     control_width,
                                     control_height,
-                                    app_layout_text(language, "Название раскладки", "Layout name"),
+                                    app_layout_text(language, "Раскладка", "Layout"),
                                     80,
                                     egui::Align::Min,
                                 )
@@ -474,7 +501,7 @@ impl EntropyApp {
         }
 
         if snapshot.editor_layout_id != selected_id {
-            self.activate_application_layout(&selected_id);
+            self.select_application_layout_for_editing(&selected_id);
         }
 
         let selected = self
@@ -487,7 +514,6 @@ impl EntropyApp {
             let is_default =
                 selected.id == crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID;
             let executable = selected.executable.clone();
-            let mut automatic = selected.automatic_switching;
 
             let mut application_display = if is_default {
                 app_layout_text(
@@ -554,46 +580,6 @@ impl EntropyApp {
                     }
                 },
             );
-
-            if !is_default {
-                let automatic_switching_tooltip = app_layout_text(
-                    language,
-                    "Включать эту раскладку, когда связанное приложение находится в фокусе",
-                    "Activate this layout when its associated application is focused",
-                );
-                crate::ui_style::settings_list_row_with_tooltip(
-                    ui,
-                    row_width,
-                    row_height,
-                    app_layout_text(language, "Автопереключение", "Automatic switching"),
-                    true,
-                    Some(automatic_switching_tooltip),
-                    metrics.value(46.0),
-                    |ui| {
-                        crate::ui_style::settings_switch_sized_stable_interactive(
-                            ui,
-                            (
-                                "application_layout_automatic_switching",
-                                selected.id.as_str(),
-                            ),
-                            &mut automatic,
-                            metrics.size(46.0, 24.0),
-                            true,
-                        )
-                        .on_hover_text(automatic_switching_tooltip);
-                    },
-                );
-            }
-
-            if let Some(settings) = self.app_settings.application_layouts.get_mut(&device_key) {
-                if let Some(layout) = settings.layouts.get_mut(&selected.id) {
-                    if !is_default && layout.automatic_switching != automatic {
-                        layout.automatic_switching = automatic;
-                        layout.bump_revision();
-                        changed = true;
-                    }
-                }
-            }
 
             ui.add_space(metrics.value(20.0));
             let action_size = metrics.size(126.0, 34.0);

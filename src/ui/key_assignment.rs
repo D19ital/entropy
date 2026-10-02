@@ -682,6 +682,19 @@ impl EntropyApp {
             return;
         };
         match action {
+            UndoAction::ApplicationLayoutControl {
+                device_key,
+                layout_id,
+                layer,
+                control,
+                old_keycode,
+            } => self.undo_application_layout_control(
+                &device_key,
+                &layout_id,
+                layer,
+                control,
+                old_keycode,
+            ),
             UndoAction::Key {
                 layer,
                 key_idx,

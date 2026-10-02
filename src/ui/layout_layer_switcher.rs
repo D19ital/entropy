@@ -75,7 +75,7 @@ impl EntropyApp {
         }
         let current_id = self
             .application_layout_settings()
-            .map(|settings| settings.editor_layout_id.clone())
+            .map(|settings| settings.active_layout_id.clone())
             .unwrap_or_else(|| {
                 crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID.to_owned()
             });
@@ -493,7 +493,7 @@ impl EntropyApp {
                         .application_layout_editor_active
                         .then(|| {
                             self.application_layout_settings()
-                                .map(|settings| settings.editor_layout_id.clone())
+                                .map(|settings| settings.active_layout_id.clone())
                         })
                         .flatten();
                 }

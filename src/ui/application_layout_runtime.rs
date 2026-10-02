@@ -1,17 +1,26 @@
 use super::*;
 
 fn device_supports_application_layouts(device: &crate::device::Device) -> bool {
-    device.firmware == FirmwareProtocol::Vial && device.is_m4cr0pad_v3()
+    device.firmware == FirmwareProtocol::Vial && device.is_ergohaven_display_macropad()
 }
 
 impl EntropyApp {
     fn connected_application_layout_device_key(&self) -> Option<String> {
-        self.selected_device
+        let device = self
+            .selected_device
             .and_then(|index| self.device_manager.devices().get(index))
             .filter(|device| device_supports_application_layouts(device))?;
-        Some(match self.current_keyboard_id {
+        // v2 and v3 currently advertise the same Vial UID, but their
+        // application profiles must not overwrite one another. Keep the
+        // original v3 key so existing v3 profiles remain available.
+        let key = match self.current_keyboard_id {
             Some(id) => format!("vial-{id:016x}"),
             None => device_id_slug(&self.current_device_name),
+        };
+        Some(if device.is_m4cr0pad_v3() {
+            key
+        } else {
+            format!("{key}-m4cr0pad-v2")
         })
     }
 
@@ -145,9 +154,26 @@ impl EntropyApp {
         changed
     }
 
+    pub(super) fn select_application_layout_for_editing(&mut self, id: &str) -> bool {
+        self.commit_pending_application_layout_edits();
+        let changed = self
+            .application_layout_settings_mut()
+            .is_some_and(|settings| {
+                if !settings.layouts.contains_key(id) || settings.editor_layout_id == id {
+                    return false;
+                }
+                settings.editor_layout_id = id.to_owned();
+                true
+            });
+        if changed {
+            save_app_settings(&self.app_settings);
+        }
+        changed
+    }
+
     pub(super) fn application_layout_editor_layer_names(&self) -> Vec<String> {
         self.application_layout_settings()
-            .and_then(|settings| settings.editor_layout())
+            .and_then(|settings| settings.active_layout())
             .map(|layout| layout.layer_names.clone())
             .unwrap_or_else(crate::application_layouts::default_layer_names)
     }
@@ -267,7 +293,7 @@ impl EntropyApp {
         Self::application_layout_rendered_copy_for_profile(
             layout,
             self.application_layout_settings()
-                .and_then(|settings| settings.editor_layout()),
+                .and_then(|settings| settings.active_layout()),
         )
     }
 
@@ -299,7 +325,7 @@ impl EntropyApp {
         let layout = self.layout.as_ref()?;
         let control = Self::application_control_for_key(layout, key_index)?;
         self.application_layout_settings()
-            .and_then(|settings| settings.editor_layout())
+            .and_then(|settings| settings.active_layout())
             .and_then(|profile| profile.layers.get(self.selected_layer))
             .map(|keycodes| crate::keyboard::KeyBinding::Vial(keycodes[control]))
     }
@@ -314,7 +340,7 @@ impl EntropyApp {
         let layout = self.layout.as_ref()?;
         let control = Self::application_control_for_encoder(layout, visual_index)?;
         self.application_layout_settings()
-            .and_then(|settings| settings.editor_layout())
+            .and_then(|settings| settings.active_layout())
             .and_then(|profile| profile.layers.get(self.selected_layer))
             .map(|keycodes| keycodes[control])
     }
@@ -349,11 +375,15 @@ impl EntropyApp {
         control: usize,
         keycode: u16,
     ) -> bool {
+        let previous = self.application_layout_control_undo_state(layer, control);
         let changed = self
             .application_layout_settings_mut()
-            .and_then(|settings| settings.editor_layout_mut())
+            .and_then(|settings| settings.layouts.get_mut(&settings.active_layout_id))
             .is_some_and(|layout| layout.set_keycode(layer, control, keycode));
         if changed {
+            if let Some(action) = previous {
+                self.undo_stack.push(action);
+            }
             save_app_settings(&self.app_settings);
             self.status_msg = app_layout_text(
                 self.app_settings.language,
@@ -363,6 +393,48 @@ impl EntropyApp {
             .to_owned();
         }
         true
+    }
+
+    fn application_layout_control_undo_state(
+        &self,
+        layer: usize,
+        control: usize,
+    ) -> Option<UndoAction> {
+        let device_key = self.application_layout_device_key()?;
+        let settings = self.app_settings.application_layouts.get(&device_key)?;
+        let layout_id = settings.active_layout_id.clone();
+        let old_keycode = *settings
+            .layouts
+            .get(&layout_id)?
+            .layers
+            .get(layer)?
+            .get(control)?;
+        Some(UndoAction::ApplicationLayoutControl {
+            device_key,
+            layout_id,
+            layer,
+            control,
+            old_keycode,
+        })
+    }
+
+    pub(super) fn undo_application_layout_control(
+        &mut self,
+        device_key: &str,
+        layout_id: &str,
+        layer: usize,
+        control: usize,
+        old_keycode: u16,
+    ) {
+        let changed = self
+            .app_settings
+            .application_layouts
+            .get_mut(device_key)
+            .and_then(|settings| settings.layouts.get_mut(layout_id))
+            .is_some_and(|layout| layout.set_keycode(layer, control, old_keycode));
+        if changed {
+            save_app_settings(&self.app_settings);
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -403,6 +475,7 @@ impl EntropyApp {
         if !manual_override_active {
             self.application_layout_manual_override = None;
         }
+        let installed_presets = crate::app_discovery::installed_builtin_presets();
         let mut persist = false;
         let (snapshot, active_layout_followed, active_layout_changed) = {
             let settings = self
@@ -411,6 +484,7 @@ impl EntropyApp {
                 .entry(device_key)
                 .or_default();
             persist |= settings.normalize();
+            persist |= settings.provision_builtin_presets(installed_presets.as_ref().ok());
             persist |=
                 settings.enrich_application_identities(&self.application_discovery.available);
             if let Some(seed) = seed {
@@ -423,14 +497,8 @@ impl EntropyApp {
                 &foreground_status.state,
                 manual_override_active,
             );
-            let focused_layout_is_configured = match &foreground_status.state {
-                crate::app_discovery::ForegroundState::Focused(application) => {
-                    settings.layouts.get(&resolved).is_some_and(|layout| {
-                        layout.automatic_switching && layout.matches(application)
-                    })
-                }
-                _ => false,
-            };
+            let focused_layout_is_configured =
+                should_follow_focused_layout(settings, &resolved, &foreground_status.state);
             let previous_active_layout_id = settings.active_layout_id.clone();
             let active_layout_followed = apply_resolved_layout(
                 settings,
@@ -540,6 +608,23 @@ fn resolve_layout_for_foreground(
             // confirmed layout until the backend recovers.
             settings.active_layout_id.clone()
         }
+    }
+}
+
+fn should_follow_focused_layout(
+    settings: &crate::application_layouts::DeviceApplicationLayouts,
+    resolved: &str,
+    foreground: &crate::app_discovery::ForegroundState,
+) -> bool {
+    if !settings.automatic_switching_enabled {
+        return false;
+    }
+    match foreground {
+        crate::app_discovery::ForegroundState::Focused(application) => settings
+            .layouts
+            .get(resolved)
+            .is_some_and(|layout| layout.automatic_switching && layout.matches(application)),
+        _ => false,
     }
 }
 
@@ -688,6 +773,35 @@ mod tests {
     }
 
     #[test]
+    fn shared_vial_uid_does_not_merge_v2_and_v3_application_profiles() {
+        let ctx = egui::Context::default();
+        let creation_context = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EntropyApp::new(&creation_context);
+        let mut device = m4cr0pad_v3_device();
+        app.current_keyboard_id = Some(0xBB17F05B02801D1D);
+        app.device_manager.replace_devices(vec![device.clone()]);
+        app.selected_device = Some(0);
+        let v3_key = app.application_layout_device_key().unwrap();
+        assert_eq!(v3_key, "vial-bb17f05b02801d1d");
+
+        device.product_id = 0x0041;
+        app.device_manager.replace_devices(vec![device]);
+        let v2_key = app.application_layout_device_key().unwrap();
+        assert_eq!(v2_key, "vial-bb17f05b02801d1d-m4cr0pad-v2");
+        assert_ne!(v2_key, v3_key);
+    }
+
+    #[test]
+    fn v2_supports_application_layouts_without_enabling_other_devices() {
+        let mut device = m4cr0pad_v3_device();
+        device.name = "M4CR0Pad v2".to_owned();
+        device.product_id = 0x0041;
+        assert!(device_supports_application_layouts(&device));
+        device.product_id = 0x0040;
+        assert!(!device_supports_application_layouts(&device));
+    }
+
+    #[test]
     fn detector_failure_keeps_last_confirmed_layout() {
         let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
         let application = crate::application_layouts::DetectedApplication {
@@ -705,6 +819,41 @@ mod tests {
         );
 
         assert_eq!(resolved, layout_id);
+    }
+
+    #[test]
+    fn off_mode_preserves_editor_during_matching_focus_change() {
+        let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+        let application = crate::application_layouts::DetectedApplication {
+            executable: "code".to_owned(),
+            identities: Vec::new(),
+            display_name: "Code".to_owned(),
+            window_title: String::new(),
+        };
+        let layout_id = settings.create_for_application(&application);
+        settings.active_layout_id = layout_id.clone();
+        settings.editor_layout_id =
+            crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID.to_owned();
+        let focused = crate::app_discovery::ForegroundState::Focused(application);
+        settings.automatic_switching_enabled = false;
+        let resolved = resolve_layout_for_foreground(&settings, &focused);
+        assert_eq!(resolved, layout_id);
+        assert!(!should_follow_focused_layout(
+            &settings, &resolved, &focused
+        ));
+        assert!(!apply_resolved_layout(
+            &mut settings,
+            resolved.clone(),
+            false
+        ));
+        assert_eq!(
+            settings.editor_layout_id,
+            crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID
+        );
+        settings.automatic_switching_enabled = true;
+        assert!(should_follow_focused_layout(&settings, &resolved, &focused));
+        assert!(apply_resolved_layout(&mut settings, resolved, true));
+        assert_eq!(settings.editor_layout_id, layout_id);
     }
 
     #[test]
@@ -1005,7 +1154,7 @@ mod tests {
     }
 
     #[test]
-    fn layout_indicator_uses_active_profile_not_manually_selected_editor_profile() {
+    fn settings_selection_does_not_change_main_or_device_layout() {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx);
         let mut app = EntropyApp::new(&creation_context);
@@ -1040,18 +1189,49 @@ mod tests {
         let active_profile = settings.layouts.get_mut(&active).unwrap();
         active_profile.set_keycode(0, 0, 0x0005);
         active_profile.set_layer_name(0, "каль".to_owned());
-        settings.editor_layout_id = editor;
-        settings.active_layout_id = active;
+        settings.editor_layout_id =
+            crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID.to_owned();
+        settings.active_layout_id = active.clone();
         app.app_settings
             .application_layouts
-            .insert(device_key, settings);
+            .insert(device_key.clone(), settings);
+
+        app.selected_layer = 3;
+        assert!(app.select_application_layout_for_editing(&editor));
+        let settings = &app.app_settings.application_layouts[&device_key];
+        assert_eq!(settings.editor_layout_id, editor);
+        assert_eq!(settings.active_layout_id, active);
+        assert_eq!(app.selected_layer, 3);
+        assert!(app.application_layout_manual_override.is_none());
 
         let base = indicator_test_layout();
-        let editor_rendered = app.application_layout_rendered_copy(&base);
+        let main_rendered = app.application_layout_rendered_copy(&base);
         let indicator_rendered = app.application_layout_active_rendered_copy(&base);
 
-        assert_eq!(editor_rendered.get_keycode(0, 0), 0x0004);
+        assert_eq!(main_rendered.get_keycode(0, 0), 0x0005);
         assert_eq!(indicator_rendered.get_keycode(0, 0), 0x0005);
         assert_eq!(app.application_layout_active_layer_names()[0], "каль");
+
+        assert!(app.assign_application_layout_control(0, 0, 0x0006));
+        assert!(app.assign_application_layout_control(0, 0, 0x0007));
+        let settings = &app.app_settings.application_layouts[&device_key];
+        assert_eq!(settings.layouts[&active].layers[0][0], 0x0007);
+        assert_eq!(settings.layouts[&editor].layers[0][0], 0x0004);
+
+        app.undo(&egui::Context::default());
+        assert_eq!(
+            app.app_settings.application_layouts[&device_key].layouts[&active].layers[0][0],
+            0x0006
+        );
+        app.app_settings
+            .application_layouts
+            .get_mut(&device_key)
+            .unwrap()
+            .active_layout_id = editor.clone();
+        app.undo(&egui::Context::default());
+        let settings = &app.app_settings.application_layouts[&device_key];
+        assert_eq!(settings.layouts[&active].layers[0][0], 0x0005);
+        assert_eq!(settings.layouts[&editor].layers[0][0], 0x0004);
+        assert_eq!(settings.active_layout_id, editor);
     }
 }
