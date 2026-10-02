@@ -135,6 +135,9 @@ mod layout_options_settings_ui;
 #[path = "ui/layout_shared.rs"]
 mod layout_shared;
 use layout_shared::*;
+#[path = "ui/top_menu_icon_catalog.rs"]
+mod top_menu_icon_catalog;
+use top_menu_icon_catalog::*;
 #[path = "ui/top_dropdown.rs"]
 mod top_dropdown;
 use top_dropdown::*;
