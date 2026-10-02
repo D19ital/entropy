@@ -45,8 +45,12 @@ fn layer_after_wheel(selected: usize, layer_count: usize, wheel_delta: f32) -> u
     }
 }
 
-fn layer_name_edit_is_available(hid_busy: bool, selected_layer_ready: bool) -> bool {
-    !hid_busy && selected_layer_ready
+fn layer_name_hover_is_available(user_action_busy: bool, selected_layer_ready: bool) -> bool {
+    !user_action_busy && selected_layer_ready
+}
+
+fn layer_name_edit_is_available(hover_available: bool, background_layer_active: bool) -> bool {
+    hover_available && !background_layer_active
 }
 
 impl EntropyApp {
@@ -307,13 +311,20 @@ impl EntropyApp {
                     self.jump_back_stack.clear();
                 }
                 #[cfg(not(target_arch = "wasm32"))]
-                let layer_name_edit_available = layer_name_edit_is_available(
-                    self.hid_write_task_active(),
+                let layer_name_hover_available = layer_name_hover_is_available(
+                    self.hid_user_action_busy(),
                     self.deferred_device_load.layer_status(selected).ready(),
                 );
                 #[cfg(target_arch = "wasm32")]
-                let layer_name_edit_available = true;
-                if name_r.hovered() && layer_name_edit_available {
+                let layer_name_hover_available = true;
+                #[cfg(not(target_arch = "wasm32"))]
+                let layer_name_edit_available = layer_name_edit_is_available(
+                    layer_name_hover_available,
+                    self.vial_hid_background_layer_active(),
+                );
+                #[cfg(target_arch = "wasm32")]
+                let layer_name_edit_available = layer_name_hover_available;
+                if name_r.hovered() && layer_name_hover_available {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
                 if name_r.clicked() && layer_name_edit_available {
@@ -370,7 +381,7 @@ impl EntropyApp {
                 self.draw_layout_bottom_hints(
                     ui,
                     center_x,
-                    name_r.hovered() && layer_name_edit_available,
+                    name_r.hovered() && layer_name_hover_available,
                 );
             }
 
@@ -384,8 +395,8 @@ mod tests {
     use crate::app::{DeferredDeviceLoadState, DeferredLoadStatus, DeviceAboutInfo, EntropyApp};
 
     use super::{
-        layer_after_wheel, layer_name_edit_is_available, main_menu_battery_status,
-        main_menu_reserves_battery_status_space, MainMenuBatteryStatus,
+        layer_after_wheel, layer_name_edit_is_available, layer_name_hover_is_available,
+        main_menu_battery_status, main_menu_reserves_battery_status_space, MainMenuBatteryStatus,
     };
 
     #[test]
@@ -436,10 +447,21 @@ mod tests {
 
     #[test]
     fn layer_name_edit_requires_selected_layer_but_not_all_layers() {
-        assert!(!layer_name_edit_is_available(true, true));
-        assert!(layer_name_edit_is_available(false, true));
-        assert!(!layer_name_edit_is_available(false, false));
-        assert!(!layer_name_edit_is_available(true, false));
+        assert!(!layer_name_hover_is_available(true, true));
+        assert!(layer_name_hover_is_available(false, true));
+        assert!(!layer_name_hover_is_available(false, false));
+        assert!(!layer_name_hover_is_available(true, false));
+    }
+
+    #[test]
+    fn background_hid_reads_do_not_flicker_rename_hover_or_start_a_write() {
+        let ready_hover = layer_name_hover_is_available(false, true);
+        assert!(ready_hover);
+        assert!(layer_name_edit_is_available(ready_hover, false));
+        assert!(!layer_name_edit_is_available(ready_hover, true));
+        // The hover state remains true in both frames while the serialized HID
+        // reader alternates between active requests and short idle intervals.
+        assert!(layer_name_hover_is_available(false, true));
     }
 
     #[test]
