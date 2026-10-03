@@ -2036,12 +2036,20 @@ impl eframe::App for EntropyApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.maybe_start_combo_write(ctx);
 
-        let mut settings_page_navigation_handled = false;
-        if self.can_return_from_settings_page(
-            ctx,
-            modal_or_popup_open_at_frame_start,
-            keyboard_input_wanted_at_frame_start,
-        ) {
+        if self.main_menu_tab != MainMenuTab::Keyboard
+            || self.layout.is_none()
+            || self.current_encoder_visibility_id.is_empty()
+        {
+            self.editing_layout_visibility = false;
+        }
+        let mut settings_page_navigation_handled = self.finish_layout_visibility_edit_on_input(ctx);
+        if !settings_page_navigation_handled
+            && self.can_return_from_settings_page(
+                ctx,
+                modal_or_popup_open_at_frame_start,
+                keyboard_input_wanted_at_frame_start,
+            )
+        {
             let esc_pressed = ctx.input(|i| i.key_pressed(egui::Key::Escape));
             let rclick = ctx.input(|i| i.pointer.secondary_clicked());
             if esc_pressed || rclick {

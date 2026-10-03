@@ -4,6 +4,7 @@ advanced_tooltip = "Дополнительные функции устройст
 settings_tooltip = "Настройки приложения и устройства"
 key_legends_english_first = "Легенды: EN / RU"
 key_legends_russian_first = "Легенды: RU / EN"
+show_hide_keys = "Показать/скрыть клавиши"
 
 [key_hints]
 change_key = "Левый клик — изменить эту клавишу"
@@ -25,6 +26,8 @@ go_to_that_layer = "Правый клик — перейти на этот сл�
 change_layer_target = "Ctrl + правый клик — изменить целевой слой"
 change_tap_key = "Ctrl + правый клик — изменить tap-клавишу"
 rename_layer = "Клик — переименовать слой"
+show_hide_keys_click = "ЛКМ по клавише или энкодеру — показать или скрыть"
+show_hide_keys_exit = "ПКМ или Esc — завершить"
 
 [layer_actions]
 menu = "Операции со слоем"

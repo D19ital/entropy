@@ -498,7 +498,8 @@ impl EntropyApp {
                 if name_r.hovered() && layer_name_hover_available {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
-                if name_r.clicked() && layer_name_edit_available {
+                if name_r.clicked() && layer_name_edit_available && !self.editing_layout_visibility
+                {
                     self.editing_layer = Some(selected);
                     self.editing_layer_text = raw_name.clone();
                     self.editing_layer_layout_id = self

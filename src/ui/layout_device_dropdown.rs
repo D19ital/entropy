@@ -97,14 +97,14 @@ impl EntropyApp {
             let device_count = self.device_manager.devices().len();
             let show_key_legend_switcher = self.app_settings.key_legend_layout.is_multilingual();
             // Rows in drawing order: the device list (or its placeholder) |
-            // key legend order, layer operations | import, export, image
+            // key legend order, layer operations, show/hide keys | import, export, image
             // (native builds only) | layout indicator, about device.
             #[cfg(not(target_arch = "wasm32"))]
             let (file_rows, file_dividers) = (3, 1);
             #[cfg(target_arch = "wasm32")]
             let (file_rows, file_dividers) = (0, 0);
             let row_count =
-                device_count.max(1) + show_key_legend_switcher as usize + 1 + file_rows + 2;
+                device_count.max(1) + show_key_legend_switcher as usize + 2 + file_rows + 2;
             let divider_count = 2 + file_dividers;
             let mut device_menu_labels: Vec<String> = if self.device_manager.devices().is_empty() {
                 vec![crate::i18n::tr(lang, TrKey::NoDevicesFound).to_owned()]
@@ -128,6 +128,8 @@ impl EntropyApp {
                 }
             }
             device_menu_labels.push(crate::i18n::tr_catalog(lang, "layer_actions.menu").to_owned());
+            device_menu_labels
+                .push(crate::i18n::tr_catalog(lang, "main_menu.show_hide_keys").to_owned());
             #[cfg(not(target_arch = "wasm32"))]
             {
                 device_menu_labels.push(entlayout_import_label(lang).to_owned());
@@ -296,6 +298,22 @@ impl EntropyApp {
                     layer_operations_row_rect = Some(layer_operations_response.rect);
                     layer_operations_hovered =
                         layer_operations_response.hovered() && layer_operations_available;
+
+                    if top_dropdown_icon_item(
+                        ui,
+                        dropdown_size.x - 16.0,
+                        TopMenuIcon::ShowHideKeys,
+                        crate::i18n::tr_catalog(lang, "main_menu.show_hide_keys"),
+                        self.layout.is_some() && !self.current_encoder_visibility_id.is_empty(),
+                        self.editing_layout_visibility,
+                    )
+                    .clicked()
+                    {
+                        self.close_top_dropdowns(ctx);
+                        self.start_layout_visibility_edit();
+                        ctx.request_repaint();
+                        device_clicked = true;
+                    }
 
                     #[cfg(not(target_arch = "wasm32"))]
                     {

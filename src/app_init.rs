@@ -300,6 +300,7 @@ impl EntropyApp {
             current_device_name: String::new(),
             current_keyboard_id: None,
             current_encoder_visibility_id: String::new(),
+            editing_layout_visibility: false,
             device_display_names: std::collections::HashMap::new(),
             device_about_info: None,
             update_check,

@@ -4,6 +4,7 @@ advanced_tooltip = "Advanced device features"
 settings_tooltip = "Application and device settings"
 key_legends_english_first = "Legends: EN / RU"
 key_legends_russian_first = "Legends: RU / EN"
+show_hide_keys = "Show/Hide Keys"
 
 [key_hints]
 change_key = "Left click to change this key"
@@ -25,6 +26,8 @@ go_to_that_layer = "Right click to go to that layer"
 change_layer_target = "Ctrl+right-click to change layer target"
 change_tap_key = "Ctrl+right-click to change tap key"
 rename_layer = "Click to rename layer"
+show_hide_keys_click = "Left click a key or encoder to show or hide it"
+show_hide_keys_exit = "Right click or Esc to finish"
 
 [layer_actions]
 menu = "Layer operations"

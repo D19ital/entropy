@@ -149,6 +149,8 @@ mod layout_chrome;
 mod layout_device_dropdown;
 #[path = "ui/layout_dropdowns.rs"]
 mod layout_dropdowns;
+#[path = "ui/layout_element_visibility.rs"]
+mod layout_element_visibility;
 #[path = "ui/layout_hints.rs"]
 mod layout_hints;
 #[path = "ui/layout_image_export.rs"]

@@ -35,8 +35,21 @@ pub(crate) struct SavedPictogram {
     pub(crate) bitmap: Vec<u8>,
 }
 
+/// Entropy-only visibility of physical positions, independent of the firmware keymap.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct LayoutElementVisibility {
+    #[serde(default)]
+    pub(crate) hidden_keys: std::collections::BTreeSet<(u8, u8)>,
+    #[serde(default)]
+    pub(crate) hidden_encoders: std::collections::BTreeSet<u8>,
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct AppSettings {
+    /// Local cosmetic choices, keyed by the same stable device identity as encoder visibility.
+    #[serde(default)]
+    pub(crate) layout_element_visibility:
+        std::collections::BTreeMap<String, LayoutElementVisibility>,
     /// Per-device application layouts. Kept in Entropy settings so the base
     /// Vial keymap remains the reliable fallback when Entropy is not running.
     #[serde(default)]
@@ -202,6 +215,7 @@ pub(crate) fn clamp_ui_scale(scale: f32) -> f32 {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            layout_element_visibility: std::collections::BTreeMap::new(),
             application_layouts: std::collections::BTreeMap::new(),
             last_application_layout_device_key: None,
             last_application_layout_device_name: None,
@@ -5403,6 +5417,8 @@ pub struct EntropyApp {
     /// Stable local settings key for encoder visibility. Uses Vial keyboard id when available
     /// so keyboards with the same display name do not share hidden/shown encoder settings.
     pub(crate) current_encoder_visibility_id: String,
+    /// Temporary interaction mode; only the per-device choices above are persisted.
+    pub(crate) editing_layout_visibility: bool,
     /// Friendly names learned from firmware/device info, keyed by device path.
     pub(crate) device_display_names: std::collections::HashMap<String, String>,
     pub(crate) device_about_info: Option<DeviceAboutInfo>,

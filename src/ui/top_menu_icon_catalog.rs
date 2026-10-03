@@ -66,6 +66,7 @@ pub(super) enum TopMenuIcon {
     Device,
     KeyLegendOrder,
     LayerOperations,
+    ShowHideKeys,
     ImportLayout,
     ExportLayout,
     ExportImage,
@@ -99,10 +100,11 @@ pub(super) enum TopMenuIcon {
 
 impl TopMenuIcon {
     #[cfg(test)]
-    pub(super) const ALL: [TopMenuIcon; 32] = [
+    pub(super) const ALL: [TopMenuIcon; 33] = [
         TopMenuIcon::Device,
         TopMenuIcon::KeyLegendOrder,
         TopMenuIcon::LayerOperations,
+        TopMenuIcon::ShowHideKeys,
         TopMenuIcon::ImportLayout,
         TopMenuIcon::ExportLayout,
         TopMenuIcon::ExportImage,
@@ -145,6 +147,7 @@ impl TopMenuIcon {
             TopMenuIcon::Device => ("⌨", Devices),
             TopMenuIcon::KeyLegendOrder => ("🌐", Layers),
             TopMenuIcon::LayerOperations => ("☰", Layers),
+            TopMenuIcon::ShowHideKeys => ("▧", Layers),
             TopMenuIcon::ImportLayout => ("📥", Files),
             TopMenuIcon::ExportLayout => ("📤", Files),
             TopMenuIcon::ExportImage => ("🖼", Files),
@@ -190,10 +193,11 @@ impl TopMenuIcon {
 mod tests {
     use super::*;
 
-    const LAYOUT_MENU_ICONS: [TopMenuIcon; 8] = [
+    const LAYOUT_MENU_ICONS: [TopMenuIcon; 9] = [
         TopMenuIcon::Device,
         TopMenuIcon::KeyLegendOrder,
         TopMenuIcon::LayerOperations,
+        TopMenuIcon::ShowHideKeys,
         TopMenuIcon::ImportLayout,
         TopMenuIcon::ExportLayout,
         TopMenuIcon::ExportImage,
