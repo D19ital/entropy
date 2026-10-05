@@ -2,6 +2,44 @@ use super::*;
 
 type EncoderGroup = (u8, egui::Rect, Option<(usize, u16)>, Option<(usize, u16)>);
 
+fn visibility_edit_outline_rect(
+    editing: bool,
+    keyboard_bounds: Option<egui::Rect>,
+    viewport: egui::Rect,
+) -> Option<egui::Rect> {
+    editing
+        .then_some(keyboard_bounds?)
+        .map(|bounds| bounds.expand(18.0).intersect(viewport.shrink(8.0)))
+}
+
+#[cfg(test)]
+mod visibility_outline_tests {
+    use super::*;
+
+    #[test]
+    fn outline_tracks_keyboard_and_encoder_bounds_only_in_edit_mode() {
+        let viewport = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(400.0, 300.0));
+        let keys = egui::Rect::from_min_max(egui::pos2(30.0, 60.0), egui::pos2(110.0, 110.0));
+        let encoder = egui::Rect::from_min_max(egui::pos2(220.0, 80.0), egui::pos2(260.0, 120.0));
+        let bounds = keys.union(encoder);
+
+        assert_eq!(
+            visibility_edit_outline_rect(false, Some(bounds), viewport),
+            None
+        );
+        assert_eq!(visibility_edit_outline_rect(true, None, viewport), None);
+        assert_eq!(
+            visibility_edit_outline_rect(true, Some(bounds), viewport),
+            Some(bounds.expand(18.0))
+        );
+        let edge = egui::Rect::from_min_max(egui::pos2(4.0, 60.0), egui::pos2(396.0, 120.0));
+        assert_eq!(
+            visibility_edit_outline_rect(true, Some(edge), viewport),
+            Some(edge.expand(18.0).intersect(viewport.shrink(8.0)))
+        );
+    }
+}
+
 fn group_encoder_rects(
     layout: &KeyboardLayout,
     encoder_rects: &[(usize, egui::Rect)],
@@ -169,6 +207,20 @@ impl EntropyApp {
             .reduce(|acc, rect| acc.union(rect));
         if let Some(rect) = keyboard_target_rect {
             self.register_tour_target(TourTarget::KeyboardArea, rect.expand(10.0));
+        }
+        // The keyboard bounds already include visible keys and complete encoder
+        // groups. Paint only a visual mode cue; do not change layout or hitboxes.
+        if let Some(rect) = visibility_edit_outline_rect(
+            self.editing_layout_visibility,
+            keyboard_target_rect,
+            ui.max_rect(),
+        ) {
+            ui.painter().rect_stroke(
+                rect,
+                egui::CornerRadius::same(10),
+                egui::Stroke::new(1.5, crate::ui_style::accent()),
+                egui::StrokeKind::Inside,
+            );
         }
         let mut rects: Vec<(usize, egui::Rect, egui::Response)> =
             Vec::with_capacity(layout.keys.len());
