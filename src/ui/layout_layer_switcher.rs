@@ -86,19 +86,20 @@ impl EntropyApp {
             26.0
         };
         let name_font = FontId::proportional(name_size);
-        let name_width = ui.fonts_mut(|fonts| {
+        let name_extent = ui.fonts_mut(|fonts| {
             fonts
                 .layout_no_wrap(visible_name.clone(), name_font.clone(), Color32::WHITE)
                 .size()
-                .x
         });
         let chevron_half_width = 4.5;
-        let chevron_x = center_x + name_width / 2.0 + 9.0 + chevron_half_width;
+        let chevron_x = center_x + name_extent.x / 2.0 + 9.0 + chevron_half_width;
+        // Align the chevron tip with the bottom of the rendered name, not its center.
+        let chevron_y = center_y + name_extent.y / 2.0 - 2.5;
         // Keep the name centered; fit the shared click target tightly around
         // both glyphs instead of reserving space for the longest possible name.
         let selector_rect = egui::Rect::from_min_max(
             egui::pos2(
-                center_x - name_width / 2.0 - 6.0,
+                center_x - name_extent.x / 2.0 - 6.0,
                 center_y - selector_height / 2.0,
             ),
             egui::pos2(
@@ -136,7 +137,7 @@ impl EntropyApp {
         );
         crate::ui_style::paint_dropdown_chevron(
             ui.painter(),
-            egui::pos2(chevron_x, center_y),
+            egui::pos2(chevron_x, chevron_y),
             arrow_color,
         );
 
@@ -722,7 +723,13 @@ mod tests {
         assert!((8.0..=10.0).contains(&gap), "chevron gap: {gap}");
         assert!(chevron.iter().all(|(_, stroke)| stroke.width > 0.0));
         assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if matches!(text.galley.text(), "▾" | "‹" | "›"))));
-        let arrow_click = egui::pos2(chevron_left + 4.5, selector_center.y);
+        let chevron_tip = chevron
+            .iter()
+            .flat_map(|(points, _)| points.iter())
+            .map(|p| p.y)
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!((chevron_tip - (name.pos.y + name.galley.size().y)).abs() < 1.0);
+        let arrow_click = egui::pos2(chevron_left + 4.5, chevron_tip - 2.5);
 
         // The former left-arrow area no longer changes profiles or opens the menu.
         for pressed in [true, false] {
