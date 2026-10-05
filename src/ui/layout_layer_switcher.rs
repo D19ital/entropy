@@ -53,19 +53,6 @@ fn layer_name_edit_is_available(hover_available: bool, background_layer_active: 
     hover_available && !background_layer_active
 }
 
-fn application_layout_after_step(current: usize, count: usize, step: i32) -> usize {
-    if count == 0 {
-        return 0;
-    }
-    if step < 0 {
-        current.saturating_sub(1)
-    } else if step > 0 {
-        (current + 1).min(count - 1)
-    } else {
-        current.min(count - 1)
-    }
-}
-
 impl EntropyApp {
     fn draw_application_layout_switcher(
         &mut self,
@@ -91,35 +78,19 @@ impl EntropyApp {
         let visible_name: String = current_name.chars().take(14).collect();
         let selector_width = 200.0;
         let selector_height = 34.0;
-        let selector_rect = egui::Rect::from_center_size(
-            egui::pos2(center_x, center_y),
-            egui::vec2(140.0, selector_height),
+        // Keep the popup anchored below the program name, while the single
+        // down-arrow above it shares the same click target. Do not overlap the
+        // layer-name hitbox, which ends at center_y - 32.
+        let selector_rect = egui::Rect::from_min_max(
+            egui::pos2(center_x - 70.0, center_y - 32.0),
+            egui::pos2(center_x + 70.0, center_y + selector_height / 2.0),
         );
-        let left_center = egui::pos2(center_x - 86.0, center_y - 1.0);
-        let right_center = egui::pos2(center_x + 86.0, center_y - 1.0);
         let dropdown_id = ui.make_persistent_id("layout_page_application_selector");
         let response = ui.allocate_rect(selector_rect, Sense::click());
-        let left_rect = egui::Rect::from_center_size(left_center, egui::vec2(28.0, 34.0));
-        let right_rect = egui::Rect::from_center_size(right_center, egui::vec2(28.0, 34.0));
-        let left_response = ui.allocate_rect(left_rect, Sense::click());
-        let right_response = ui.allocate_rect(right_rect, Sense::click());
-
-        if left_response.clicked() {
-            let index = application_layout_after_step(current_index, options.len(), -1);
-            if index != current_index {
-                self.activate_application_layout(&options[index].0);
-            }
-        }
-        if right_response.clicked() {
-            let index = application_layout_after_step(current_index, options.len(), 1);
-            if index != current_index {
-                self.activate_application_layout(&options[index].0);
-            }
-        }
         if response.clicked() {
             egui::Popup::toggle_id(ui.ctx(), dropdown_id);
         }
-        if response.hovered() || left_response.hovered() || right_response.hovered() {
+        if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
 
@@ -128,19 +99,10 @@ impl EntropyApp {
         } else {
             Color32::from_gray(60)
         };
-        let disabled = if self.dark_mode {
-            Color32::from_gray(60)
+        let arrow_color = if response.hovered() {
+            app_accent()
         } else {
-            Color32::from_gray(200)
-        };
-        let arrow_color = |hovered| {
-            if hovered {
-                app_accent()
-            } else if self.dark_mode {
-                Color32::from_gray(140)
-            } else {
-                Color32::from_gray(120)
-            }
+            app_muted_text(self.dark_mode)
         };
         let name_size = if visible_name.chars().count() > 11 {
             18.0
@@ -157,26 +119,11 @@ impl EntropyApp {
             text_color,
         );
         ui.painter().text(
-            left_center,
+            egui::pos2(center_x, center_y - 22.0),
             egui::Align2::CENTER_CENTER,
-            "‹",
-            FontId::proportional(34.7),
-            if current_index == 0 {
-                disabled
-            } else {
-                arrow_color(left_response.hovered())
-            },
-        );
-        ui.painter().text(
-            right_center,
-            egui::Align2::CENTER_CENTER,
-            "›",
-            FontId::proportional(34.7),
-            if current_index + 1 >= options.len() {
-                disabled
-            } else {
-                arrow_color(right_response.hovered())
-            },
+            "▾",
+            FontId::proportional(18.0),
+            arrow_color,
         );
 
         crate::ui_style::popup_below_widget(
@@ -577,9 +524,8 @@ mod tests {
     use crate::app::{DeferredDeviceLoadState, DeferredLoadStatus, DeviceAboutInfo, EntropyApp};
 
     use super::{
-        application_layout_after_step, layer_after_wheel, layer_name_edit_is_available,
-        layer_name_hover_is_available, main_menu_battery_status,
-        main_menu_reserves_battery_status_space, MainMenuBatteryStatus,
+        layer_after_wheel, layer_name_edit_is_available, layer_name_hover_is_available,
+        main_menu_battery_status, main_menu_reserves_battery_status_space, MainMenuBatteryStatus,
     };
 
     #[test]
@@ -707,12 +653,85 @@ mod tests {
     }
 
     #[test]
-    fn application_layout_arrows_do_not_wrap() {
-        assert_eq!(application_layout_after_step(0, 3, -1), 0);
-        assert_eq!(application_layout_after_step(0, 3, 1), 1);
-        assert_eq!(application_layout_after_step(2, 3, 1), 2);
-        assert_eq!(application_layout_after_step(2, 3, -1), 1);
-        assert_eq!(application_layout_after_step(0, 0, 1), 0);
+    fn application_selector_has_one_down_arrow_and_opens_from_above_name() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        let device_key = "offline-macropad-test".to_owned();
+        app.app_settings.application_layouts.insert(
+            device_key.clone(),
+            crate::application_layouts::DeviceApplicationLayouts::default(),
+        );
+        app.app_settings.last_application_layout_device_key = Some(device_key);
+        let selector_center = egui::pos2(450.0, 130.0);
+        let frame = |app: &mut EntropyApp, events| {
+            let mut popup_id = None;
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 650.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    popup_id = Some(ui.make_persistent_id("layout_page_application_selector"));
+                    app.draw_application_layout_switcher(ui, selector_center.x, selector_center.y);
+                },
+            );
+            (popup_id.unwrap(), output)
+        };
+        let (popup_id, output) = frame(&mut app, vec![]);
+        let glyphs = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some((text.galley.text(), text.pos.y)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let arrow_y = glyphs.iter().find(|(text, _)| *text == "▾").unwrap().1;
+        let name_y = glyphs
+            .iter()
+            .find(|(text, _)| *text == "Default")
+            .unwrap()
+            .1;
+        assert!(arrow_y < name_y);
+        assert!(!glyphs.iter().any(|(text, _)| matches!(*text, "‹" | "›")));
+
+        // The former side-arrow area no longer changes profiles or opens the menu.
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(egui::pos2(536.0, 130.0)),
+                    egui::Event::PointerButton {
+                        pos: egui::pos2(536.0, 130.0),
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert!(!egui::Popup::is_id_open(&ctx, popup_id));
+
+        // The arrow and name share the existing dropdown selection path.
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(egui::pos2(450.0, 108.0)),
+                    egui::Event::PointerButton {
+                        pos: egui::pos2(450.0, 108.0),
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert!(egui::Popup::is_id_open(&ctx, popup_id));
     }
 
     #[test]
