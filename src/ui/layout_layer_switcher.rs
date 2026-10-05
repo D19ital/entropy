@@ -78,11 +78,39 @@ impl EntropyApp {
         let visible_name: String = current_name.chars().take(14).collect();
         let selector_width = 200.0;
         let selector_height = 34.0;
-        // The single down-arrow sits to the right of the program name. Both
-        // share the existing popup hitbox, below the layer-name controls.
-        let selector_rect = egui::Rect::from_center_size(
-            egui::pos2(center_x + 16.0, center_y),
-            egui::vec2(172.0, selector_height),
+        let name_size = if visible_name.chars().count() > 11 {
+            18.0
+        } else if visible_name.chars().count() > 8 {
+            21.0
+        } else {
+            26.0
+        };
+        let name_font = FontId::proportional(name_size);
+        let arrow_font = FontId::proportional(18.0);
+        let (name_width, arrow_width) = ui.fonts_mut(|fonts| {
+            (
+                fonts
+                    .layout_no_wrap(visible_name.clone(), name_font.clone(), Color32::WHITE)
+                    .size()
+                    .x,
+                fonts
+                    .layout_no_wrap("▾".to_owned(), arrow_font.clone(), Color32::WHITE)
+                    .size()
+                    .x,
+            )
+        });
+        let arrow_x = center_x + name_width / 2.0 + 5.0 + arrow_width / 2.0;
+        // Keep the name centered; fit the shared click target tightly around
+        // both glyphs instead of reserving space for the longest possible name.
+        let selector_rect = egui::Rect::from_min_max(
+            egui::pos2(
+                center_x - name_width / 2.0 - 6.0,
+                center_y - selector_height / 2.0,
+            ),
+            egui::pos2(
+                arrow_x + arrow_width / 2.0 + 6.0,
+                center_y + selector_height / 2.0,
+            ),
         );
         let dropdown_id = ui.make_persistent_id("layout_page_application_selector");
         let response = ui.allocate_rect(selector_rect, Sense::click());
@@ -93,7 +121,9 @@ impl EntropyApp {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
 
-        let text_color = if self.dark_mode {
+        let text_color = if response.hovered() {
+            app_accent()
+        } else if self.dark_mode {
             Color32::from_gray(245)
         } else {
             Color32::from_gray(60)
@@ -103,25 +133,18 @@ impl EntropyApp {
         } else {
             app_muted_text(self.dark_mode)
         };
-        let name_size = if visible_name.chars().count() > 11 {
-            18.0
-        } else if visible_name.chars().count() > 8 {
-            21.0
-        } else {
-            26.0
-        };
         ui.painter().text(
             egui::pos2(center_x, center_y),
             egui::Align2::CENTER_CENTER,
             visible_name,
-            FontId::proportional(name_size),
+            name_font,
             text_color,
         );
         ui.painter().text(
-            egui::pos2(center_x + 86.0, center_y),
+            egui::pos2(arrow_x, center_y),
             egui::Align2::CENTER_CENTER,
             "▾",
-            FontId::proportional(18.0),
+            arrow_font,
             arrow_color,
         );
 
@@ -685,20 +708,25 @@ mod tests {
             .shapes
             .iter()
             .filter_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) => Some((text.galley.text(), text.pos)),
+                egui::Shape::Text(text) => {
+                    Some((text.galley.text().to_owned(), text.pos, text.galley.size()))
+                }
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let arrow = glyphs.iter().find(|(text, _)| *text == "▾").unwrap().1;
+        let arrow = glyphs.iter().find(|(text, _, _)| text == "▾").unwrap();
         let name = glyphs
             .iter()
-            .find(|(text, _)| *text == "Default")
-            .unwrap()
-            .1;
-        assert!(arrow.x > name.x + 50.0);
-        assert!((arrow.y - name.y).abs() < 10.0);
-        assert_eq!(glyphs.iter().filter(|(text, _)| *text == "▾").count(), 1);
-        assert!(!glyphs.iter().any(|(text, _)| matches!(*text, "‹" | "›")));
+            .find(|(text, _, _)| text == "Default")
+            .unwrap();
+        let gap = arrow.1.x - (name.1.x + name.2.x);
+        assert!((4.0..=6.0).contains(&gap), "arrow gap: {gap}");
+        assert!((arrow.1.y - name.1.y).abs() < 10.0);
+        assert_eq!(glyphs.iter().filter(|(text, _, _)| text == "▾").count(), 1);
+        assert!(!glyphs
+            .iter()
+            .any(|(text, _, _)| matches!(text.as_str(), "‹" | "›")));
+        let arrow_click = arrow.1 + arrow.2 * 0.5;
 
         // The former left-arrow area no longer changes profiles or opens the menu.
         for pressed in [true, false] {
@@ -717,14 +745,30 @@ mod tests {
         }
         assert!(!egui::Popup::is_id_open(&ctx, popup_id));
 
+        // Hovering either half highlights both the program text and the arrow.
+        for pos in [selector_center, arrow_click] {
+            let (_, hover) = frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
+            for label in ["Default", "▾"] {
+                let text = hover
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == label => Some(text),
+                        _ => None,
+                    })
+                    .unwrap();
+                assert_eq!(text.fallback_color, crate::ui_style::accent());
+            }
+        }
+
         // The arrow opens the dropdown through the existing selector response.
         for pressed in [true, false] {
             frame(
                 &mut app,
                 vec![
-                    egui::Event::PointerMoved(egui::pos2(536.0, 130.0)),
+                    egui::Event::PointerMoved(arrow_click),
                     egui::Event::PointerButton {
-                        pos: egui::pos2(536.0, 130.0),
+                        pos: arrow_click,
                         button: egui::PointerButton::Primary,
                         pressed,
                         modifiers: egui::Modifiers::NONE,
