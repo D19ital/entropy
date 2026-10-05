@@ -807,6 +807,15 @@ mod tests {
             bundle["data"]["keymap"],
             serde_json::json!([[4, 5], [6, 7]])
         );
+        // An explicit empty preference can clear prior hidden positions on import.
+        assert_eq!(
+            bundle["data"]["layout_element_visibility"]["hidden_keys"],
+            serde_json::json!([])
+        );
+        assert_eq!(
+            bundle["data"]["layout_element_visibility"]["hidden_encoders"],
+            serde_json::json!([])
+        );
         assert_eq!(
             bundle["data"]["combos"]["entries"]
                 .as_array()

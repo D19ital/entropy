@@ -35,7 +35,7 @@ impl LayoutElementVisibility {
 }
 
 impl EntropyApp {
-    fn layout_element_visibility_device_key(&self) -> Option<String> {
+    pub(super) fn layout_element_visibility_device_key(&self) -> Option<String> {
         let base = self.current_encoder_visibility_id.as_str();
         let serial = self
             .selected_device
@@ -44,7 +44,7 @@ impl EntropyApp {
         local_layout_visibility_key(base, serial)
     }
 
-    fn current_layout_element_visibility(&self) -> Option<&LayoutElementVisibility> {
+    pub(super) fn current_layout_element_visibility(&self) -> Option<&LayoutElementVisibility> {
         let device_key = self.layout_element_visibility_device_key()?;
         self.app_settings.layout_element_visibility.get(&device_key)
     }
@@ -53,6 +53,23 @@ impl EntropyApp {
         &self,
         layout: &KeyboardLayout,
         key: &PhysicalKey,
+    ) -> bool {
+        self.layout_key_visible_with_edit_mode(layout, key, self.editing_layout_visibility)
+    }
+
+    pub(super) fn exported_layout_key_visible(
+        &self,
+        layout: &KeyboardLayout,
+        key: &PhysicalKey,
+    ) -> bool {
+        self.layout_key_visible_with_edit_mode(layout, key, false)
+    }
+
+    fn layout_key_visible_with_edit_mode(
+        &self,
+        layout: &KeyboardLayout,
+        key: &PhysicalKey,
+        editing: bool,
     ) -> bool {
         let automatically_visible = Self::layout_key_visible(
             &self.module_settings,
@@ -68,22 +85,11 @@ impl EntropyApp {
             Self::encoder_visibility_allows(layout, encoder_idx, &self.encoder_visibility)
                 && self
                     .current_layout_element_visibility()
-                    .is_none_or(|visibility| {
-                        visibility.encoder_visible(
-                            encoder_idx,
-                            true,
-                            self.editing_layout_visibility,
-                        )
-                    })
+                    .is_none_or(|visibility| visibility.encoder_visible(encoder_idx, true, editing))
         });
         self.current_layout_element_visibility()
             .map_or(automatically_visible, |visibility| {
-                visibility.key_visible(
-                    key.row,
-                    key.col,
-                    automatically_visible,
-                    self.editing_layout_visibility,
-                )
+                visibility.key_visible(key.row, key.col, automatically_visible, editing)
             })
     }
 
@@ -92,26 +98,46 @@ impl EntropyApp {
         layout: &KeyboardLayout,
         encoder: &PhysicalEncoder,
     ) -> bool {
-        let automatically_visible =
-            Self::encoder_layout_condition_visible(layout, encoder, self.layout_options_value)
-                && Self::module_settings_encoder_visible(
-                    &self.module_settings,
-                    layout,
-                    encoder.encoder_idx,
-                )
-                && Self::encoder_visibility_allows(
-                    layout,
-                    encoder.encoder_idx,
-                    &self.encoder_visibility,
-                );
+        self.layout_encoder_visible_with_edit_mode(layout, encoder, self.editing_layout_visibility)
+    }
+
+    pub(super) fn exported_layout_encoder_visible(
+        &self,
+        layout: &KeyboardLayout,
+        encoder: &PhysicalEncoder,
+    ) -> bool {
+        self.layout_encoder_visible_with_edit_mode(layout, encoder, false)
+    }
+
+    fn layout_encoder_visible_with_edit_mode(
+        &self,
+        layout: &KeyboardLayout,
+        encoder: &PhysicalEncoder,
+        editing: bool,
+    ) -> bool {
+        let automatically_visible = self.automatic_layout_encoder_visible(layout, encoder);
         self.current_layout_element_visibility()
             .map_or(automatically_visible, |visibility| {
-                visibility.encoder_visible(
-                    encoder.encoder_idx,
-                    automatically_visible,
-                    self.editing_layout_visibility,
-                )
+                visibility.encoder_visible(encoder.encoder_idx, automatically_visible, editing)
             })
+    }
+
+    pub(super) fn automatic_layout_encoder_visible(
+        &self,
+        layout: &KeyboardLayout,
+        encoder: &PhysicalEncoder,
+    ) -> bool {
+        Self::encoder_layout_condition_visible(layout, encoder, self.layout_options_value)
+            && Self::module_settings_encoder_visible(
+                &self.module_settings,
+                layout,
+                encoder.encoder_idx,
+            )
+            && Self::encoder_visibility_allows(
+                layout,
+                encoder.encoder_idx,
+                &self.encoder_visibility,
+            )
     }
 
     pub(super) fn main_layout_key_dimmed(&self, key: &PhysicalKey) -> bool {
