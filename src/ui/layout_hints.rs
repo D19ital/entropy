@@ -173,6 +173,7 @@ impl EntropyApp {
                 center_x,
                 hint_y,
                 &[
+                    "key_hints.show_hide_keys_mode",
                     "key_hints.show_hide_keys_click",
                     "key_hints.show_hide_keys_exit",
                 ],

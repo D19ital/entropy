@@ -26,6 +26,7 @@ go_to_that_layer = "Правый клик — перейти на этот сл�
 change_layer_target = "Ctrl + правый клик — изменить целевой слой"
 change_tap_key = "Ctrl + правый клик — изменить tap-клавишу"
 rename_layer = "Клик — переименовать слой"
+show_hide_keys_mode = "Включён режим редактирования видимости клавиш"
 show_hide_keys_click = "ЛКМ по клавише или энкодеру — показать или скрыть"
 show_hide_keys_exit = "ПКМ или Esc — завершить"
 

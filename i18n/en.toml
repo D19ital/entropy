@@ -26,6 +26,7 @@ go_to_that_layer = "Right click to go to that layer"
 change_layer_target = "Ctrl+right-click to change layer target"
 change_tap_key = "Ctrl+right-click to change tap key"
 rename_layer = "Click to rename layer"
+show_hide_keys_mode = "Key visibility edit mode is active"
 show_hide_keys_click = "Left click a key or encoder to show or hide it"
 show_hide_keys_exit = "Right click or Esc to finish"
 
