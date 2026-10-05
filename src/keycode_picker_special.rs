@@ -21,7 +21,8 @@ impl KeycodePicker {
             | KeycodeTab::UniversalSymbols
             | KeycodeTab::Special
             | KeycodeTab::Rgb
-            | KeycodeTab::Custom => Self::key_grid_width(ui, 13, spacing),
+            | KeycodeTab::Custom
+            | KeycodeTab::Bluetooth => Self::key_grid_width(ui, 13, spacing),
             KeycodeTab::Modifiers => Self::key_grid_width(ui, 13, spacing),
             KeycodeTab::Macro | KeycodeTab::TapDance => Self::slot_grid_width(8, 8.0),
             _ => 840.0,
@@ -353,6 +354,39 @@ Repeat"
                 tap_dance_state: tap_dance_data_state,
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn bluetooth_and_custom_keycaps_use_the_same_horizontal_insets() {
+        let ctx = egui::Context::default();
+        let mut widths = Vec::new();
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 800.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let mut picker = KeycodePicker::default();
+                for tab in [KeycodeTab::Custom, KeycodeTab::Bluetooth] {
+                    picker.selected_tab = tab;
+                    widths.push(picker.tab_content_width(ui));
+                }
+                assert!(ui.available_width() > widths[0]);
+                assert_eq!(
+                    widths[0],
+                    KeycodePicker::key_grid_width(ui, 13, ui.spacing().item_spacing.x)
+                );
+            },
+        );
+        assert_eq!(widths[0], widths[1]);
     }
 }
 
