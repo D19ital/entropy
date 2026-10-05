@@ -78,12 +78,11 @@ impl EntropyApp {
         let visible_name: String = current_name.chars().take(14).collect();
         let selector_width = 200.0;
         let selector_height = 34.0;
-        // Keep the popup anchored below the program name, while the single
-        // down-arrow above it shares the same click target. Do not overlap the
-        // layer-name hitbox, which ends at center_y - 32.
-        let selector_rect = egui::Rect::from_min_max(
-            egui::pos2(center_x - 70.0, center_y - 32.0),
-            egui::pos2(center_x + 70.0, center_y + selector_height / 2.0),
+        // The single down-arrow sits to the right of the program name. Both
+        // share the existing popup hitbox, below the layer-name controls.
+        let selector_rect = egui::Rect::from_center_size(
+            egui::pos2(center_x + 16.0, center_y),
+            egui::vec2(172.0, selector_height),
         );
         let dropdown_id = ui.make_persistent_id("layout_page_application_selector");
         let response = ui.allocate_rect(selector_rect, Sense::click());
@@ -119,7 +118,7 @@ impl EntropyApp {
             text_color,
         );
         ui.painter().text(
-            egui::pos2(center_x, center_y - 22.0),
+            egui::pos2(center_x + 86.0, center_y),
             egui::Align2::CENTER_CENTER,
             "▾",
             FontId::proportional(18.0),
@@ -653,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn application_selector_has_one_down_arrow_and_opens_from_above_name() {
+    fn application_selector_has_one_down_arrow_beside_name() {
         let ctx = egui::Context::default();
         let mut app = EntropyApp::new_inert_for_test();
         let device_key = "offline-macropad-test".to_owned();
@@ -686,27 +685,29 @@ mod tests {
             .shapes
             .iter()
             .filter_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) => Some((text.galley.text(), text.pos.y)),
+                egui::Shape::Text(text) => Some((text.galley.text(), text.pos)),
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let arrow_y = glyphs.iter().find(|(text, _)| *text == "▾").unwrap().1;
-        let name_y = glyphs
+        let arrow = glyphs.iter().find(|(text, _)| *text == "▾").unwrap().1;
+        let name = glyphs
             .iter()
             .find(|(text, _)| *text == "Default")
             .unwrap()
             .1;
-        assert!(arrow_y < name_y);
+        assert!(arrow.x > name.x + 50.0);
+        assert!((arrow.y - name.y).abs() < 10.0);
+        assert_eq!(glyphs.iter().filter(|(text, _)| *text == "▾").count(), 1);
         assert!(!glyphs.iter().any(|(text, _)| matches!(*text, "‹" | "›")));
 
-        // The former side-arrow area no longer changes profiles or opens the menu.
+        // The former left-arrow area no longer changes profiles or opens the menu.
         for pressed in [true, false] {
             frame(
                 &mut app,
                 vec![
-                    egui::Event::PointerMoved(egui::pos2(536.0, 130.0)),
+                    egui::Event::PointerMoved(egui::pos2(364.0, 130.0)),
                     egui::Event::PointerButton {
-                        pos: egui::pos2(536.0, 130.0),
+                        pos: egui::pos2(364.0, 130.0),
                         button: egui::PointerButton::Primary,
                         pressed,
                         modifiers: egui::Modifiers::NONE,
@@ -716,14 +717,14 @@ mod tests {
         }
         assert!(!egui::Popup::is_id_open(&ctx, popup_id));
 
-        // The arrow and name share the existing dropdown selection path.
+        // The arrow opens the dropdown through the existing selector response.
         for pressed in [true, false] {
             frame(
                 &mut app,
                 vec![
-                    egui::Event::PointerMoved(egui::pos2(450.0, 108.0)),
+                    egui::Event::PointerMoved(egui::pos2(536.0, 130.0)),
                     egui::Event::PointerButton {
-                        pos: egui::pos2(450.0, 108.0),
+                        pos: egui::pos2(536.0, 130.0),
                         button: egui::PointerButton::Primary,
                         pressed,
                         modifiers: egui::Modifiers::NONE,
