@@ -86,20 +86,14 @@ impl EntropyApp {
             26.0
         };
         let name_font = FontId::proportional(name_size);
-        let arrow_font = FontId::proportional(18.0);
-        let (name_width, arrow_width) = ui.fonts_mut(|fonts| {
-            (
-                fonts
-                    .layout_no_wrap(visible_name.clone(), name_font.clone(), Color32::WHITE)
-                    .size()
-                    .x,
-                fonts
-                    .layout_no_wrap("▾".to_owned(), arrow_font.clone(), Color32::WHITE)
-                    .size()
-                    .x,
-            )
+        let name_width = ui.fonts_mut(|fonts| {
+            fonts
+                .layout_no_wrap(visible_name.clone(), name_font.clone(), Color32::WHITE)
+                .size()
+                .x
         });
-        let arrow_x = center_x + name_width / 2.0 + 5.0 + arrow_width / 2.0;
+        let chevron_half_width = 4.5;
+        let chevron_x = center_x + name_width / 2.0 + 9.0 + chevron_half_width;
         // Keep the name centered; fit the shared click target tightly around
         // both glyphs instead of reserving space for the longest possible name.
         let selector_rect = egui::Rect::from_min_max(
@@ -108,7 +102,7 @@ impl EntropyApp {
                 center_y - selector_height / 2.0,
             ),
             egui::pos2(
-                arrow_x + arrow_width / 2.0 + 6.0,
+                chevron_x + chevron_half_width + 6.0,
                 center_y + selector_height / 2.0,
             ),
         );
@@ -140,11 +134,9 @@ impl EntropyApp {
             name_font,
             text_color,
         );
-        ui.painter().text(
-            egui::pos2(arrow_x, center_y),
-            egui::Align2::CENTER_CENTER,
-            "▾",
-            arrow_font,
+        crate::ui_style::paint_dropdown_chevron(
+            ui.painter(),
+            egui::pos2(chevron_x, center_y),
             arrow_color,
         );
 
@@ -704,29 +696,33 @@ mod tests {
             (popup_id.unwrap(), output)
         };
         let (popup_id, output) = frame(&mut app, vec![]);
-        let glyphs = output
+        let name = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Default" => Some(text),
+                _ => None,
+            })
+            .unwrap();
+        let chevron = output
             .shapes
             .iter()
             .filter_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) => {
-                    Some((text.galley.text().to_owned(), text.pos, text.galley.size()))
-                }
+                egui::Shape::LineSegment { points, stroke } => Some((points, stroke)),
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let arrow = glyphs.iter().find(|(text, _, _)| text == "▾").unwrap();
-        let name = glyphs
+        assert_eq!(chevron.len(), 2, "one unfilled, two-stroke chevron");
+        let chevron_left = chevron
             .iter()
-            .find(|(text, _, _)| text == "Default")
-            .unwrap();
-        let gap = arrow.1.x - (name.1.x + name.2.x);
-        assert!((4.0..=6.0).contains(&gap), "arrow gap: {gap}");
-        assert!((arrow.1.y - name.1.y).abs() < 10.0);
-        assert_eq!(glyphs.iter().filter(|(text, _, _)| text == "▾").count(), 1);
-        assert!(!glyphs
-            .iter()
-            .any(|(text, _, _)| matches!(text.as_str(), "‹" | "›")));
-        let arrow_click = arrow.1 + arrow.2 * 0.5;
+            .flat_map(|(points, _)| points.iter())
+            .map(|p| p.x)
+            .fold(f32::INFINITY, f32::min);
+        let gap = chevron_left - (name.pos.x + name.galley.size().x);
+        assert!((8.0..=10.0).contains(&gap), "chevron gap: {gap}");
+        assert!(chevron.iter().all(|(_, stroke)| stroke.width > 0.0));
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if matches!(text.galley.text(), "▾" | "‹" | "›"))));
+        let arrow_click = egui::pos2(chevron_left + 4.5, selector_center.y);
 
         // The former left-arrow area no longer changes profiles or opens the menu.
         for pressed in [true, false] {
@@ -748,17 +744,27 @@ mod tests {
         // Hovering either half highlights both the program text and the arrow.
         for pos in [selector_center, arrow_click] {
             let (_, hover) = frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
-            for label in ["Default", "▾"] {
-                let text = hover
-                    .shapes
-                    .iter()
-                    .find_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) if text.galley.text() == label => Some(text),
-                        _ => None,
-                    })
-                    .unwrap();
-                assert_eq!(text.fallback_color, crate::ui_style::accent());
-            }
+            let text = hover
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "Default" => Some(text),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(text.fallback_color, crate::ui_style::accent());
+            let strokes = hover
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::LineSegment { stroke, .. } => Some(stroke),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(strokes.len(), 2);
+            assert!(strokes
+                .iter()
+                .all(|stroke| stroke.color == crate::ui_style::accent()));
         }
 
         // The arrow opens the dropdown through the existing selector response.

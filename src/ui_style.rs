@@ -745,23 +745,29 @@ pub fn modern_dropdown_button_sized(
         FontId::proportional(font_size),
         text_color,
     );
-    let chevron_y = dropdown_rect.center().y + 1.0;
-    let chevron_color = muted_text(dark);
-    ui.painter().line_segment(
-        [
-            egui::pos2(chevron_x - 4.5, chevron_y - 2.0),
-            egui::pos2(chevron_x, chevron_y + 2.5),
-        ],
-        Stroke::new(1.4_f32, chevron_color),
-    );
-    ui.painter().line_segment(
-        [
-            egui::pos2(chevron_x, chevron_y + 2.5),
-            egui::pos2(chevron_x + 4.5, chevron_y - 2.0),
-        ],
-        Stroke::new(1.4_f32, chevron_color),
+    paint_dropdown_chevron(
+        ui.painter(),
+        egui::pos2(chevron_x, dropdown_rect.center().y + 1.0),
+        muted_text(dark),
     );
     dropdown_resp
+}
+
+pub fn paint_dropdown_chevron(painter: &egui::Painter, center: egui::Pos2, color: Color32) {
+    painter.line_segment(
+        [
+            egui::pos2(center.x - 4.5, center.y - 2.0),
+            egui::pos2(center.x, center.y + 2.5),
+        ],
+        Stroke::new(1.4_f32, color),
+    );
+    painter.line_segment(
+        [
+            egui::pos2(center.x, center.y + 2.5),
+            egui::pos2(center.x + 4.5, center.y - 2.0),
+        ],
+        Stroke::new(1.4_f32, color),
+    );
 }
 
 pub fn modern_dropdown_select_sized(
