@@ -401,15 +401,6 @@ pub(super) fn picker_tab_button(
         label_galley,
         label_color,
     );
-    if active {
-        // Shape cue for the selected tab, so the accent fill is not the only
-        // signal.
-        let underline = egui::Rect::from_min_size(
-            egui::pos2(left, rect.bottom() - 6.0),
-            Vec2::new(glyph_size.x + gap + label_size.x, 2.0),
-        );
-        painter.rect_filled(underline, 1.0, label_color);
-    }
     resp
 }
 
