@@ -146,7 +146,7 @@ impl EntropyApp {
             .iter()
             .map(|(_, name)| name.clone())
             .collect::<Vec<_>>();
-        if let Some(index) = crate::ui_style::modern_dropdown_popup_options(
+        if let Some(index) = crate::ui_style::modern_dropdown_popup_options_with_max_height(
             ui,
             dropdown_id,
             &response,
@@ -154,6 +154,7 @@ impl EntropyApp {
             current_index,
             selector_width,
             12.5,
+            300.0, // Ten compact options at 28px each with 2px row spacing.
         ) {
             self.activate_application_layout(&options[index].0);
         }
@@ -824,11 +825,12 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert!(!visible_names.is_empty());
-        assert!(
-            visible_names.len() < 12,
-            "popup must scroll: {visible_names:?}"
+        assert_eq!(
+            visible_names.len(),
+            9,
+            "ten options (Default + nine applications) must be visible: {visible_names:?}"
         );
+        assert!(!visible_names.contains(&"Application 9".to_owned()));
         assert!(popup.shapes.iter().any(|shape| matches!(
             &shape.shape,
             egui::Shape::Text(text) if text.galley.text() == "Default"

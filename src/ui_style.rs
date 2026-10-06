@@ -804,6 +804,22 @@ pub fn modern_dropdown_popup_options(
     min_width: f32,
     font_size: f32,
 ) -> Option<usize> {
+    modern_dropdown_popup_options_with_max_height(
+        ui, id, trigger, labels, selected, min_width, font_size, 142.0,
+    )
+}
+
+/// Render the compact dropdown list with a caller-specific scroll viewport height.
+pub fn modern_dropdown_popup_options_with_max_height(
+    ui: &mut Ui,
+    id: egui::Id,
+    trigger: &egui::Response,
+    labels: &[String],
+    selected: usize,
+    min_width: f32,
+    font_size: f32,
+    viewport_max_height: f32,
+) -> Option<usize> {
     let dark = ui.visuals().dark_mode;
     let option_font = FontId::proportional(font_size);
     let longest_label_width = labels
@@ -834,7 +850,7 @@ pub fn modern_dropdown_popup_options(
             ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
             let option_height = 28.0;
             let max_height = (labels.len() as f32 * (option_height + 2.0))
-                .min(142.0)
+                .min(viewport_max_height)
                 .max(option_height);
             egui::ScrollArea::vertical()
                 .id_salt(("modern_dropdown_select_scroll", id))
