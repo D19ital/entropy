@@ -136,9 +136,10 @@ impl EntropyApp {
             application_picker_target_layout_id: None,
             application_picker_search: String::new(),
             application_picker_selected: None,
-            application_layout_rename_focus_requested: false,
-            application_layout_rename_target_id: None,
-            application_layout_rename_value: String::new(),
+            application_picker_name: String::new(),
+            application_picker_category:
+                crate::application_layouts::ApplicationLayoutCategory::Other,
+            application_picker_category_changed: false,
             pending_device_connect: None,
             #[cfg(not(target_arch = "wasm32"))]
             headless: false,

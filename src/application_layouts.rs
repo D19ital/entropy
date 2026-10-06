@@ -11,9 +11,9 @@ pub(crate) const APPLICATION_LAYOUT_STACK_SLOTS: usize = 4;
 pub(crate) const APPLICATION_LAYOUT_STACK_NAME_BYTES: usize = 12;
 pub(crate) const APPLICATION_LAYOUT_NAME_BYTES: usize = 22;
 
-/// UI grouping for known application presets. This is derived from the
-/// application identity, not saved into firmware or user layout settings.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+/// UI grouping for application layouts; never sent to firmware.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum ApplicationLayoutCategory {
     Browsers,
     Development,
@@ -25,6 +25,16 @@ pub(crate) enum ApplicationLayoutCategory {
 }
 
 impl ApplicationLayoutCategory {
+    pub(crate) const ALL: [Self; 7] = [
+        Self::Browsers,
+        Self::Development,
+        Self::Graphics,
+        Self::Video,
+        Self::Audio,
+        Self::Communication,
+        Self::Other,
+    ];
+
     pub(crate) fn for_preset_id(id: &str) -> Self {
         match id {
             "google_chrome" | "firefox" => Self::Browsers,
@@ -129,6 +139,9 @@ pub(crate) struct ApplicationLayout {
     pub(crate) application_identities: Vec<String>,
     #[serde(default)]
     pub(crate) title_contains: String,
+    /// Explicit UI category; absent for legacy layouts and auto-categorized presets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) category: Option<ApplicationLayoutCategory>,
     #[serde(default = "default_true")]
     pub(crate) automatic_switching: bool,
     /// Compatibility seed for application-layouts v1. New builds persist
@@ -155,6 +168,7 @@ impl ApplicationLayout {
             executable: String::new(),
             application_identities: Vec::new(),
             title_contains: String::new(),
+            category: None,
             automatic_switching: false,
             legacy_keycodes: default_keycodes(),
             layers: default_layer_keycodes(),
@@ -452,6 +466,10 @@ impl DeviceApplicationLayouts {
             changed = true;
         }
         if let Some(default) = self.layouts.get_mut(DEFAULT_APPLICATION_LAYOUT_ID) {
+            if default.category.take().is_some() {
+                default.bump_revision();
+                changed = true;
+            }
             let stock_names = default_layer_names();
             let legacy_names = legacy_default_layer_names();
             let mut migrated_names = false;
@@ -568,6 +586,7 @@ impl DeviceApplicationLayouts {
                         .chain(application.identities.iter().map(String::as_str)),
                 ),
                 title_contains: title_contains.trim().to_owned(),
+                category: None,
                 automatic_switching: true,
                 legacy_keycodes: default_keycodes(),
                 layers: seed_layers,
@@ -821,6 +840,25 @@ impl DeviceApplicationLayouts {
         true
     }
 
+    pub(crate) fn set_layout_category(
+        &mut self,
+        id: &str,
+        category: ApplicationLayoutCategory,
+    ) -> bool {
+        if id == DEFAULT_APPLICATION_LAYOUT_ID {
+            return false;
+        }
+        let Some(layout) = self.layouts.get_mut(id) else {
+            return false;
+        };
+        if layout.category == Some(category) {
+            return false;
+        }
+        layout.category = Some(category);
+        layout.bump_revision();
+        true
+    }
+
     pub(crate) fn application_rule_exists(
         &self,
         application: &DetectedApplication,
@@ -870,11 +908,10 @@ impl DeviceApplicationLayouts {
         let name = if name.is_empty() { "Application" } else { name };
         let executable = application.executable.trim();
         let title_contains = title_contains.trim();
-        if layout.name == name
-            && layout.executable == executable
-            && layout.application_identities == identities
-            && layout.title_contains == title_contains
-        {
+        let rule_changed = layout.executable != executable
+            || layout.application_identities != identities
+            || layout.title_contains != title_contains;
+        if layout.name == name && !rule_changed {
             return false;
         }
         layout.name = name.to_owned();
@@ -882,7 +919,9 @@ impl DeviceApplicationLayouts {
         layout.application_identities = identities;
         layout.title_contains = title_contains.to_owned();
         layout.bump_revision();
-        self.pending_builtin_auto_bind.remove(id);
+        if rule_changed {
+            self.pending_builtin_auto_bind.remove(id);
+        }
         true
     }
 
@@ -3116,6 +3155,22 @@ mod tests {
     }
 
     #[test]
+    fn editing_name_only_keeps_pending_builtin_binding() {
+        let mut settings = DeviceApplicationLayouts::default();
+        let application = app("firefox", "Firefox");
+        let id = settings.create_for_application(&application);
+        settings
+            .pending_builtin_auto_bind
+            .insert(id.clone(), "firefox".to_owned());
+        assert!(settings.update_application_rule(&id, &application, "Web", ""));
+        assert_eq!(settings.layouts[&id].name, "Web");
+        assert_eq!(settings.pending_builtin_auto_bind[&id], "firefox");
+        let replacement = app("chromium", "Chromium");
+        assert!(settings.update_application_rule(&id, &replacement, "Web", ""));
+        assert!(!settings.pending_builtin_auto_bind.contains_key(&id));
+    }
+
+    #[test]
     fn rename_layout_changes_only_the_display_name_and_revision() {
         let mut settings = DeviceApplicationLayouts::default();
         let telegram = settings.create_for_application_named(
@@ -4037,5 +4092,41 @@ mod tests {
             ApplicationLayoutCategory::for_preset_id("unknown_app"),
             ApplicationLayoutCategory::Other
         );
+    }
+
+    #[test]
+    fn category_override_is_optional_for_legacy_layouts_and_persists() {
+        let mut settings = DeviceApplicationLayouts::default();
+        let id = settings.create_for_application(&app("firefox", "Firefox"));
+        let legacy = serde_json::to_value(&settings).unwrap();
+        assert!(legacy["layouts"][&id].get("category").is_none());
+        let mut restored: DeviceApplicationLayouts = serde_json::from_value(legacy).unwrap();
+        assert_eq!(restored.layouts[&id].category, None);
+        assert_eq!(
+            restored.layouts[DEFAULT_APPLICATION_LAYOUT_ID].category,
+            None
+        );
+
+        let revision = restored.layouts[&id].revision;
+        assert!(!restored.set_layout_category(
+            DEFAULT_APPLICATION_LAYOUT_ID,
+            ApplicationLayoutCategory::Audio
+        ));
+        assert!(!restored.set_layout_category("missing", ApplicationLayoutCategory::Audio));
+        assert!(restored.set_layout_category(&id, ApplicationLayoutCategory::Audio));
+        assert_eq!(restored.layouts[&id].revision, revision + 1);
+        assert!(!restored.set_layout_category(&id, ApplicationLayoutCategory::Audio));
+        assert_eq!(restored.layouts[&id].revision, revision + 1);
+        let json = serde_json::to_value(&restored).unwrap();
+        assert_eq!(json["layouts"][&id]["category"], "audio");
+        assert!(json["layouts"][DEFAULT_APPLICATION_LAYOUT_ID]
+            .get("category")
+            .is_none());
+        let round_trip: DeviceApplicationLayouts = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            round_trip.layouts[&id].category,
+            Some(ApplicationLayoutCategory::Audio)
+        );
+        assert_eq!(round_trip.layouts[&id].revision, revision + 1);
     }
 }

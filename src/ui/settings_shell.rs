@@ -332,7 +332,7 @@ impl EntropyApp {
         ) && self.settings_tab != SettingsTab::MatrixTester
             && self.settings_tab != SettingsTab::TypingTrainer
             && !self.secondary_click_handled
-            && self.application_layout_rename_target_id.is_none()
+            && !self.application_picker_open
             && self.editing_layer.is_none()
             && !self.keycode_picker.has_open_modal()
             && !self.unlock_open

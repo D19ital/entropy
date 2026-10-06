@@ -5256,9 +5256,9 @@ pub struct EntropyApp {
     pub(crate) application_picker_target_layout_id: Option<String>,
     pub(crate) application_picker_search: String,
     pub(crate) application_picker_selected: Option<crate::application_layouts::DetectedApplication>,
-    pub(crate) application_layout_rename_focus_requested: bool,
-    pub(crate) application_layout_rename_target_id: Option<String>,
-    pub(crate) application_layout_rename_value: String,
+    pub(crate) application_picker_name: String,
+    pub(crate) application_picker_category: crate::application_layouts::ApplicationLayoutCategory,
+    pub(crate) application_picker_category_changed: bool,
     /// Current firmware type (mirrors layout.firmware)
     pub(crate) firmware: FirmwareProtocol,
     /// QMK setting ids the connected firmware exposes (from the connect probe).
