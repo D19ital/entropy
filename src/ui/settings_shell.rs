@@ -367,6 +367,77 @@ mod tests {
     }
 
     #[test]
+    fn autolayer_settings_stays_in_place_when_master_switch_changes() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        let device_key = "offline-macropad-vertical-position-test".to_owned();
+        app.app_settings.application_layouts.insert(
+            device_key.clone(),
+            crate::application_layouts::DeviceApplicationLayouts::default(),
+        );
+        app.app_settings.last_application_layout_device_key = Some(device_key.clone());
+        app.open_application_layouts_page();
+        let layout = KeyboardLayout::from_vial_json(&serde_json::json!({
+            "name": "Test keyboard",
+            "matrix": { "rows": 1, "cols": 1 },
+            "layouts": { "keymap": [["0,0"]] }
+        }))
+        .unwrap();
+        let frame = |app: &mut EntropyApp| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 700.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    let ctx = ui.ctx().clone();
+                    app.draw_layout(ui, &layout, &ctx);
+                },
+            );
+            ["Autolayer", "Enable", "Add…"].map(|label| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == label => {
+                            Some(text.visual_bounding_rect().center().y)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("missing {label}"))
+            })
+        };
+        let on = frame(&mut app);
+        app.app_settings
+            .application_layouts
+            .get_mut(&device_key)
+            .unwrap()
+            .automatic_switching_enabled = false;
+        let off = frame(&mut app);
+        app.app_settings
+            .application_layouts
+            .get_mut(&device_key)
+            .unwrap()
+            .automatic_switching_enabled = true;
+        let restored = frame(&mut app);
+        for (label, (on_y, off_y, restored_y)) in ["Autolayer", "Enable", "Add…"].into_iter().zip(
+            on.into_iter()
+                .zip(off)
+                .zip(restored)
+                .map(|((a, b), c)| (a, b, c)),
+        ) {
+            assert!(
+                (on_y - off_y).abs() < 1.0,
+                "{label} jumped: {on_y} → {off_y}"
+            );
+            assert!((on_y - restored_y).abs() < 1.0, "{label} did not return");
+        }
+    }
+
+    #[test]
     fn locked_vial_feature_navigation_opens_unlock_preflight() {
         let mut app = vial_app(true);
 
