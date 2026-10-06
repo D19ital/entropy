@@ -54,6 +54,13 @@ fn layer_name_edit_is_available(hover_available: bool, background_layer_active: 
 }
 
 impl EntropyApp {
+    pub(super) fn show_main_menu_application_layout_switcher(&self) -> bool {
+        self.application_layout_editor_active
+            && self
+                .application_layout_settings()
+                .is_none_or(|settings| settings.automatic_switching_enabled)
+    }
+
     fn draw_application_layout_switcher(
         &mut self,
         ui: &mut egui::Ui,
@@ -530,7 +537,7 @@ impl EntropyApp {
             }
 
             self.draw_main_menu_battery_status(ui, center_x, mid_y);
-            if self.application_layout_editor_active {
+            if self.show_main_menu_application_layout_switcher() {
                 self.draw_application_layout_switcher(ui, center_x, mid_y + 50.0);
             }
         }
@@ -668,6 +675,60 @@ mod tests {
         assert_eq!(layer_after_wheel(14, 16, -120.0), 15);
         assert_eq!(layer_after_wheel(15, 16, -120.0), 15);
         assert_eq!(layer_after_wheel(0, 16, 120.0), 0);
+    }
+
+    #[test]
+    fn main_menu_application_selector_follows_master_switch_without_disabling_settings() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        let device_key = "offline-macropad-switch-test".to_owned();
+        app.app_settings.application_layouts.insert(
+            device_key.clone(),
+            crate::application_layouts::DeviceApplicationLayouts::default(),
+        );
+        app.app_settings.last_application_layout_device_key = Some(device_key.clone());
+        app.application_layout_editor_active = app.application_layouts_supported();
+
+        let render = |app: &mut EntropyApp| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1100.0, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.draw_layout_layer_switcher_and_hints(ui, 0.0, 0.0, 52.0),
+            );
+            output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Default")
+            })
+        };
+
+        assert!(app.show_main_menu_application_layout_switcher());
+        assert!(render(&mut app), "enabled selector is visible");
+        app.app_settings
+            .application_layouts
+            .get_mut(&device_key)
+            .unwrap()
+            .automatic_switching_enabled = false;
+        assert!(
+            app.application_layouts_supported(),
+            "Advanced settings must remain accessible"
+        );
+        assert!(
+            app.application_layout_editor_active,
+            "layout editing stays available"
+        );
+        assert!(!app.show_main_menu_application_layout_switcher());
+        assert!(!render(&mut app), "disabled selector must not be painted");
+        app.app_settings
+            .application_layouts
+            .get_mut(&device_key)
+            .unwrap()
+            .automatic_switching_enabled = true;
+        assert!(app.show_main_menu_application_layout_switcher());
+        assert!(render(&mut app), "selector returns when enabled");
     }
 
     #[test]

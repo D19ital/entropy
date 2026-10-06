@@ -60,7 +60,7 @@ impl EntropyApp {
         let layout = application_layout.as_ref().unwrap_or(layout);
         let viewport = ui.max_rect();
         let avail = viewport.size();
-        let application_layout_selector_h = if self.application_layout_editor_active {
+        let application_layout_selector_h = if self.show_main_menu_application_layout_switcher() {
             58.0
         } else {
             0.0
