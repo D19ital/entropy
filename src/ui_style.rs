@@ -1435,6 +1435,14 @@ pub fn settings_list_row_with_tooltip(
     });
 }
 
+/// Place a read-only settings value against the right edge of its control slot.
+pub fn settings_value_label(ui: &mut Ui, text: egui::RichText) -> egui::Response {
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.add(egui::Label::new(text).truncate())
+    })
+    .inner
+}
+
 #[allow(dead_code)]
 pub fn settings_switch(ui: &mut Ui, checked: &mut bool) -> egui::Response {
     settings_switch_interactive(ui, checked, true)

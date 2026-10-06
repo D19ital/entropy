@@ -720,17 +720,15 @@ impl EntropyApp {
             Some(detector_tooltip),
             control_width,
             |ui| {
-                ui.add_sized(
-                    [control_width, control_height],
-                    egui::Label::new(RichText::new(detector_text).size(control_font).color(
-                        if detector_ok {
+                crate::ui_style::settings_value_label(
+                    ui,
+                    RichText::new(detector_text)
+                        .size(control_font)
+                        .color(if detector_ok {
                             app_muted_text(ui.visuals().dark_mode)
                         } else {
                             egui::Color32::from_rgb(220, 92, 76)
-                        },
-                    ))
-                    .truncate()
-                    .halign(egui::Align::RIGHT),
+                        }),
                 )
                 .on_hover_text(&detector_details);
             },
@@ -851,15 +849,11 @@ impl EntropyApp {
             Some(foreground_tooltip),
             control_width,
             |ui| {
-                ui.add_sized(
-                    [control_width, control_height],
-                    egui::Label::new(
-                        RichText::new(&foreground)
-                            .size(control_font)
-                            .color(app_muted_text(ui.visuals().dark_mode)),
-                    )
-                    .truncate()
-                    .halign(egui::Align::RIGHT),
+                crate::ui_style::settings_value_label(
+                    ui,
+                    RichText::new(&foreground)
+                        .size(control_font)
+                        .color(app_muted_text(ui.visuals().dark_mode)),
                 );
             },
         );
@@ -885,15 +879,11 @@ impl EntropyApp {
             Some(active_layout_tooltip),
             control_width,
             |ui| {
-                ui.add_sized(
-                    [control_width, control_height],
-                    egui::Label::new(
-                        RichText::new(&active_layout)
-                            .size(control_font)
-                            .color(app_muted_text(ui.visuals().dark_mode)),
-                    )
-                    .truncate()
-                    .halign(egui::Align::RIGHT),
+                crate::ui_style::settings_value_label(
+                    ui,
+                    RichText::new(&active_layout)
+                        .size(control_font)
+                        .color(app_muted_text(ui.visuals().dark_mode)),
                 );
             },
         );
@@ -1400,6 +1390,51 @@ mod tests {
         assert_eq!(
             window_detector_status(&unavailable, Language::Russian).0,
             "Недоступен"
+        );
+    }
+
+    #[test]
+    fn status_value_text_reaches_settings_row_right_edge() {
+        let ctx = egui::Context::default();
+        let edge = std::cell::Cell::new(0.0);
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                crate::ui_style::settings_list_row_with_tooltip(
+                    ui,
+                    602.0,
+                    54.0,
+                    "Window detector",
+                    true,
+                    Some("Current detector status"),
+                    260.0,
+                    |ui| {
+                        edge.set(ui.max_rect().right());
+                        crate::ui_style::settings_value_label(ui, egui::RichText::new("Running"));
+                    },
+                );
+            },
+        );
+        let text_edge = output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(shape) if shape.galley.text() == "Running" => {
+                    Some(shape.visual_bounding_rect().right())
+                }
+                _ => None,
+            })
+            .expect("status value must be painted");
+        assert!(
+            (edge.get() - text_edge).abs() <= 4.0,
+            "value right={text_edge}, row right={}",
+            edge.get()
         );
     }
 
