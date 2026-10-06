@@ -155,6 +155,29 @@ impl EntropyApp {
         groups.into_iter().collect()
     }
 
+    pub(super) fn application_layout_editor_labeled_groups(
+        &self,
+        options: &[(String, String)],
+        language: crate::i18n::Language,
+    ) -> Vec<(String, Vec<(String, String)>)> {
+        use crate::application_layouts::ApplicationLayoutCategory as Category;
+        self.application_layout_editor_grouped_options(options)
+            .into_iter()
+            .map(|(category, entries)| {
+                let (ru, en) = match category {
+                    Category::Browsers => ("Браузеры", "Browsers"),
+                    Category::Development => ("Разработка", "Development"),
+                    Category::Graphics => ("Графика и 3D", "Graphics & 3D"),
+                    Category::Video => ("Видео и стриминг", "Video & streaming"),
+                    Category::Audio => ("Аудио", "Audio"),
+                    Category::Communication => ("Общение", "Communication"),
+                    Category::Other => ("Другие", "Other"),
+                };
+                (app_layout_text(language, ru, en).to_owned(), entries)
+            })
+            .collect()
+    }
+
     pub(super) fn activate_application_layout(&mut self, id: &str) -> bool {
         // Finish drafts against the profile where editing started before the
         // editor selection changes. Otherwise an application-focus transition

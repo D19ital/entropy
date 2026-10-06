@@ -287,27 +287,7 @@ impl EntropyApp {
             return;
         };
         let mut selected_id = snapshot.editor_layout_id.clone();
-        let mut layouts = snapshot
-            .layouts
-            .values()
-            .map(|layout| (layout.id.clone(), layout.name.clone()))
-            .collect::<Vec<_>>();
-        layouts.sort_by(|left, right| {
-            let left_default = left.0 == crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID;
-            let right_default =
-                right.0 == crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID;
-            right_default
-                .cmp(&left_default)
-                .then_with(|| left.1.to_lowercase().cmp(&right.1.to_lowercase()))
-        });
-        let layout_labels = layouts
-            .iter()
-            .map(|(_, name)| name.clone())
-            .collect::<Vec<_>>();
-        let selected_layout_index = layouts
-            .iter()
-            .position(|(id, _)| id == &selected_id)
-            .unwrap_or(0);
+        let layouts = self.application_layout_editor_options();
         let selected_name = snapshot
             .editor_layout()
             .map(|layout| layout.name.clone())
@@ -499,18 +479,23 @@ impl EntropyApp {
                     control_height,
                     control_font,
                 );
-                let picked = crate::ui_style::modern_dropdown_popup_options_with_max_height(
+                let groups = if egui::Popup::is_id_open(ui.ctx(), dropdown_id) {
+                    self.application_layout_editor_labeled_groups(&layouts, language)
+                } else {
+                    Vec::new()
+                };
+                let picked = crate::ui_style::modern_dropdown_grouped_options(
                     ui,
                     dropdown_id,
                     &dropdown,
-                    &layout_labels,
-                    selected_layout_index,
+                    &layouts[0],
+                    &groups,
+                    &selected_id,
                     control_width,
                     control_font,
-                    metrics.value(300.0),
                 );
-                if let Some(index) = picked {
-                    selected_id = layouts[index].0.clone();
+                if let Some(id) = picked {
+                    selected_id = id;
                 }
                 let can_rename =
                     selected_id != crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID;
@@ -1481,6 +1466,146 @@ mod tests {
                     assert!(width + 4.0 <= row_width - 260.0, "{label}: width={width}");
                 }
             },
+        );
+    }
+
+    #[test]
+    fn page_layout_dropdown_shows_shared_categories_and_preserves_active_layout() {
+        let mut app = EntropyApp::new_inert_for_test();
+        app.app_settings.language = crate::i18n::Language::English;
+        let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+        for (executable, name) in [("firefox", "Firefox"), ("my-tool", "My Tool")] {
+            settings.create_for_application_named(
+                &detected_application(executable, name),
+                Some(name),
+                "",
+            );
+        }
+        settings.editor_layout_id =
+            crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID.to_owned();
+        let device_key = "offline-macropad-category-test".to_owned();
+        app.app_settings
+            .application_layouts
+            .insert(device_key.clone(), settings);
+        app.app_settings.last_application_layout_device_key = Some(device_key);
+        let options = app.application_layout_editor_options();
+        assert_eq!(options[0].1, "Default");
+        let russian_groups =
+            app.application_layout_editor_labeled_groups(&options, crate::i18n::Language::Russian);
+        assert_eq!(russian_groups[0].0, "Браузеры");
+        assert_eq!(russian_groups.last().unwrap().0, "Другие");
+
+        let ctx = egui::Context::default();
+        let frame = |app: &mut EntropyApp, events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 650.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.draw_application_layouts_settings_page(ui, ui.max_rect()),
+            )
+        };
+        let first = frame(&mut app, vec![]);
+        let selector = first
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Default" => {
+                    Some(text.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .max_by(|a, b| a.y.total_cmp(&b.y))
+            .expect("page dropdown should display Default");
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(selector),
+                    egui::Event::PointerButton {
+                        pos: selector,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        let popup = frame(&mut app, vec![]);
+        let painted = popup
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text)
+                    if shape.clip_rect.intersects(text.visual_bounding_rect()) =>
+                {
+                    Some(text.galley.text())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(painted.contains(&"Browsers"), "visible labels: {painted:?}");
+        assert!(painted.contains(&"Other"), "visible labels: {painted:?}");
+        assert!(
+            !painted.contains(&"Firefox"),
+            "submenu stays hidden until hover"
+        );
+        let browser_category = popup
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Browsers" => {
+                    Some(text.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .expect("browser category must be painted");
+        frame(&mut app, vec![egui::Event::PointerMoved(browser_category)]);
+        let submenu = frame(&mut app, vec![]);
+        assert!(submenu.shapes.iter().any(|shape| matches!(
+            &shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "Firefox"
+                && shape.clip_rect.intersects(text.visual_bounding_rect())
+        )));
+        let firefox = submenu
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Firefox" => {
+                    Some(text.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .expect("browser submenu must contain Firefox");
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(firefox),
+                    egui::Event::PointerButton {
+                        pos: firefox,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert_eq!(
+            app.application_layout_settings()
+                .unwrap()
+                .editor_layout()
+                .unwrap()
+                .name,
+            "Firefox"
+        );
+        assert_eq!(
+            app.application_layout_settings().unwrap().active_layout_id,
+            "default"
         );
     }
 

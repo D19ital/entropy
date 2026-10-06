@@ -144,29 +144,7 @@ impl EntropyApp {
 
         let language = self.app_settings.language;
         let groups = if egui::Popup::is_id_open(ui.ctx(), dropdown_id) {
-            self.application_layout_editor_grouped_options(&options)
-                .into_iter()
-                .map(|(category, entries)| {
-                    use crate::application_layouts::ApplicationLayoutCategory as Category;
-                    let (ru, en) = match category {
-                        Category::Browsers => ("Браузеры", "Browsers"),
-                        Category::Development => ("Разработка", "Development"),
-                        Category::Graphics => ("Графика и 3D", "Graphics & 3D"),
-                        Category::Video => ("Видео и стриминг", "Video & streaming"),
-                        Category::Audio => ("Аудио", "Audio"),
-                        Category::Communication => ("Общение", "Communication"),
-                        Category::Other => ("Другие", "Other"),
-                    };
-                    (
-                        match language {
-                            crate::i18n::Language::Russian => ru,
-                            crate::i18n::Language::English => en,
-                        }
-                        .to_owned(),
-                        entries,
-                    )
-                })
-                .collect::<Vec<_>>()
+            self.application_layout_editor_labeled_groups(&options, language)
         } else {
             Vec::new()
         };
