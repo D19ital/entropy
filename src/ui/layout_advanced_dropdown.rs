@@ -1,3 +1,4 @@
+use super::application_layout_runtime::app_layout_text;
 use super::*;
 
 impl EntropyApp {
@@ -35,9 +36,10 @@ impl EntropyApp {
                 + combo_supported as usize
                 + auto_shift_supported as usize
                 + key_override_supported as usize;
+            let autolayer_label = app_layout_text(lang, "Автослой", "Autolayer");
             let mut advanced_menu_labels = Vec::new();
             if show_application_layouts_item {
-                advanced_menu_labels.push("Autolayer");
+                advanced_menu_labels.push(autolayer_label);
             }
             advanced_menu_labels.push(crate::i18n::tr_catalog(lang, "text_expander.title"));
             advanced_menu_labels.push(crate::i18n::tr_catalog(lang, "typing_trainer.title"));
@@ -107,7 +109,7 @@ impl EntropyApp {
                                 ui,
                                 item_width,
                                 TopMenuIcon::ApplicationLayouts,
-                                "Autolayer",
+                                autolayer_label,
                                 true,
                                 self.main_menu_tab == MainMenuTab::Advanced
                                     && self.settings_tab == SettingsTab::ApplicationLayouts,
@@ -331,7 +333,7 @@ mod tests {
         }))
         .unwrap();
         let tab = egui::Rect::from_min_size(egui::pos2(400.0, 10.0), egui::vec2(100.0, 32.0));
-        let draw = |app: &mut EntropyApp, advanced: bool, events| {
+        let draw = |app: &mut EntropyApp, advanced: bool, lang, events| {
             ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
@@ -343,19 +345,12 @@ mod tests {
                 },
                 |ui| {
                     if advanced {
-                        app.draw_layout_advanced_dropdown(
-                            ui,
-                            crate::i18n::Language::English,
-                            Some(tab),
-                            false,
-                            true,
-                            false,
-                        );
+                        app.draw_layout_advanced_dropdown(ui, lang, Some(tab), false, true, false);
                     } else {
                         app.draw_layout_settings_dropdown(
                             ui,
                             &layout,
-                            crate::i18n::Language::English,
+                            lang,
                             Some(tab),
                             false,
                             false,
@@ -376,13 +371,13 @@ mod tests {
                 _ => None,
             })
         };
-        let config = draw(&mut app, false, vec![]);
+        let config = draw(&mut app, false, crate::i18n::Language::English, vec![]);
         assert!(
             label_pos(&config, "Autolayer").is_none(),
             "Config no longer shows this item"
         );
-        draw(&mut app, true, vec![]);
-        let advanced = draw(&mut app, true, vec![]);
+        draw(&mut app, true, crate::i18n::Language::English, vec![]);
+        let advanced = draw(&mut app, true, crate::i18n::Language::English, vec![]);
         let pos = label_pos(&advanced, "Autolayer").expect("Advanced exposes Autolayer");
         let expander_label =
             crate::i18n::tr_catalog(crate::i18n::Language::English, "text_expander.title");
@@ -397,10 +392,14 @@ mod tests {
             "Autolayer and Text Expander share a group without a divider"
         );
         assert!(label_pos(&advanced, "Application layouts").is_none());
+        let russian = draw(&mut app, true, crate::i18n::Language::Russian, vec![]);
+        assert!(label_pos(&russian, "Автослой").is_some());
+        assert!(label_pos(&russian, "Autolayer").is_none());
         for pressed in [true, false] {
             draw(
                 &mut app,
                 true,
+                crate::i18n::Language::English,
                 vec![
                     egui::Event::PointerMoved(pos),
                     egui::Event::PointerButton {
