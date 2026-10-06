@@ -34,6 +34,26 @@ fn application_layout_name_is_invalid(
     value.is_empty() || settings.layout_name_exists(value, Some(target_id))
 }
 
+fn window_detector_status(
+    status: &crate::app_discovery::ForegroundStatus,
+    language: crate::i18n::Language,
+) -> (&'static str, String, bool) {
+    match &status.state {
+        crate::app_discovery::ForegroundState::BackendUnavailable(error) => (
+            app_layout_text(language, "Недоступен", "Unavailable"),
+            format!("{} — {error}", status.backend),
+            false,
+        ),
+        crate::app_discovery::ForegroundState::Focused(_)
+        | crate::app_discovery::ForegroundState::UnidentifiedWindow(_)
+        | crate::app_discovery::ForegroundState::NoFocusedWindow => (
+            app_layout_text(language, "Работает", "Running"),
+            status.backend.clone(),
+            true,
+        ),
+    }
+}
+
 fn control_pair_geometry(
     control_rect: egui::Rect,
     trailing_width: f32,
@@ -684,21 +704,8 @@ impl EntropyApp {
         control_font: f32,
     ) {
         let detector = self.application_discovery.foreground_status.clone();
-        let (detector_text, detector_ok) = match &detector.state {
-            crate::app_discovery::ForegroundState::BackendUnavailable(error) => {
-                (format!("{} — {error}", detector.backend), false)
-            }
-            crate::app_discovery::ForegroundState::Focused(_)
-            | crate::app_discovery::ForegroundState::UnidentifiedWindow(_)
-            | crate::app_discovery::ForegroundState::NoFocusedWindow => (
-                format!(
-                    "{} — {}",
-                    detector.backend,
-                    app_layout_text(language, "работает", "running")
-                ),
-                true,
-            ),
-        };
+        let (detector_text, detector_details, detector_ok) =
+            window_detector_status(&detector, language);
         let detector_tooltip = app_layout_text(
             language,
             "Показывает механизм, через который Entropy определяет активное окно. Наведите на значение, чтобы увидеть полный статус",
@@ -715,7 +722,7 @@ impl EntropyApp {
             |ui| {
                 ui.add_sized(
                     [control_width, control_height],
-                    egui::Label::new(RichText::new(&detector_text).size(control_font).color(
+                    egui::Label::new(RichText::new(detector_text).size(control_font).color(
                         if detector_ok {
                             app_muted_text(ui.visuals().dark_mode)
                         } else {
@@ -723,7 +730,8 @@ impl EntropyApp {
                         },
                     ))
                     .truncate(),
-                );
+                )
+                .on_hover_text(&detector_details);
             },
         );
 
@@ -1355,6 +1363,41 @@ mod tests {
             display_name: display_name.to_owned(),
             window_title: String::new(),
         }
+    }
+
+    #[test]
+    fn window_detector_shows_short_status_and_keeps_backend_details() {
+        use crate::app_discovery::{ForegroundState, ForegroundStatus};
+        use crate::i18n::Language;
+
+        let status = ForegroundStatus {
+            backend: "GNOME Wayland / Entropy Shell (events)".to_owned(),
+            state: ForegroundState::NoFocusedWindow,
+        };
+        let (text, details, ok) = window_detector_status(&status, Language::English);
+        assert_eq!(text, "Running");
+        assert_eq!(details, status.backend);
+        assert!(ok);
+        assert_eq!(
+            window_detector_status(&status, Language::Russian).0,
+            "Работает"
+        );
+
+        let unavailable = ForegroundStatus {
+            backend: status.backend.clone(),
+            state: ForegroundState::BackendUnavailable("Shell integration missing".to_owned()),
+        };
+        let (text, details, ok) = window_detector_status(&unavailable, Language::English);
+        assert_eq!(text, "Unavailable");
+        assert_eq!(
+            details,
+            "GNOME Wayland / Entropy Shell (events) — Shell integration missing"
+        );
+        assert!(!ok);
+        assert_eq!(
+            window_detector_status(&unavailable, Language::Russian).0,
+            "Недоступен"
+        );
     }
 
     #[test]
