@@ -142,22 +142,21 @@ impl EntropyApp {
             arrow_color,
         );
 
-        crate::ui_style::popup_below_widget(
+        let labels = options
+            .iter()
+            .map(|(_, name)| name.clone())
+            .collect::<Vec<_>>();
+        if let Some(index) = crate::ui_style::modern_dropdown_popup_options(
             ui,
             dropdown_id,
             &response,
-            egui::PopupCloseBehavior::CloseOnClickOutside,
-            |ui| {
-                ui.set_min_width(selector_width);
-                ui.spacing_mut().item_spacing = egui::vec2(0.0, 2.0);
-                for (id, name) in &options {
-                    if ui.selectable_label(id == &current_id, name).clicked() {
-                        self.activate_application_layout(id);
-                        egui::Popup::close_id(ui.ctx(), dropdown_id);
-                    }
-                }
-            },
-        );
+            &labels,
+            current_index,
+            selector_width,
+            12.5,
+        ) {
+            self.activate_application_layout(&options[index].0);
+        }
     }
 
     fn main_menu_battery_status(&self) -> MainMenuBatteryStatus {
@@ -673,10 +672,20 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = EntropyApp::new_inert_for_test();
         let device_key = "offline-macropad-test".to_owned();
-        app.app_settings.application_layouts.insert(
-            device_key.clone(),
-            crate::application_layouts::DeviceApplicationLayouts::default(),
-        );
+        let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+        for index in 0..12 {
+            settings.create_for_application_named(
+                &crate::application_layouts::DetectedApplication {
+                    executable: format!("app-{index}"),
+                    ..Default::default()
+                },
+                Some(&format!("Application {index}")),
+                "",
+            );
+        }
+        app.app_settings
+            .application_layouts
+            .insert(device_key.clone(), settings);
         app.app_settings.last_application_layout_device_key = Some(device_key);
         let selector_center = egui::pos2(450.0, 130.0);
         let frame = |app: &mut EntropyApp, events| {
@@ -795,6 +804,36 @@ mod tests {
             );
         }
         assert!(egui::Popup::is_id_open(&ctx, popup_id));
+
+        // This selector uses the same compact, scrollable rows as other modern
+        // dropdowns instead of rendering all application names as egui labels.
+        let (_, popup) = frame(
+            &mut app,
+            vec![egui::Event::PointerMoved(egui::pos2(50.0, 50.0))],
+        );
+        let visible_names = popup
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text)
+                    if text.galley.text().starts_with("Application ")
+                        && shape.clip_rect.intersects(text.visual_bounding_rect()) =>
+                {
+                    Some(text.galley.text().to_owned())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(!visible_names.is_empty());
+        assert!(
+            visible_names.len() < 12,
+            "popup must scroll: {visible_names:?}"
+        );
+        assert!(popup.shapes.iter().any(|shape| matches!(
+            &shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "Default"
+                && shape.clip_rect.intersects(text.visual_bounding_rect())
+        )));
     }
 
     #[test]

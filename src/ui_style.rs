@@ -779,7 +779,6 @@ pub fn modern_dropdown_select_sized(
     height: f32,
     font_size: f32,
 ) -> (egui::Response, Option<usize>) {
-    let dark = ui.visuals().dark_mode;
     let selected_text = labels.get(selected).map(String::as_str).unwrap_or("");
     let dropdown_resp = modern_dropdown_button_sized(
         ui,
@@ -790,6 +789,22 @@ pub fn modern_dropdown_select_sized(
         height,
         font_size,
     );
+    let picked =
+        modern_dropdown_popup_options(ui, id, &dropdown_resp, labels, selected, width, font_size);
+    (dropdown_resp, picked)
+}
+
+/// Render the standard compact dropdown list under an existing custom trigger.
+pub fn modern_dropdown_popup_options(
+    ui: &mut Ui,
+    id: egui::Id,
+    trigger: &egui::Response,
+    labels: &[String],
+    selected: usize,
+    min_width: f32,
+    font_size: f32,
+) -> Option<usize> {
+    let dark = ui.visuals().dark_mode;
     let option_font = FontId::proportional(font_size);
     let longest_label_width = labels
         .iter()
@@ -805,13 +820,13 @@ pub fn modern_dropdown_select_sized(
         })
         .fold(0.0_f32, f32::max);
     let popup_width = (longest_label_width + 24.0)
-        .max(width)
-        .min((ui.ctx().content_rect().width() - 24.0).max(width));
+        .max(min_width)
+        .min((ui.ctx().content_rect().width() - 24.0).max(min_width));
     let mut picked = None;
-    crate::ui_style::popup_below_widget_with_width(
+    popup_below_widget_with_width(
         ui,
         id,
-        &dropdown_resp,
+        trigger,
         egui::PopupCloseBehavior::CloseOnClickOutside,
         popup_width,
         |ui| {
@@ -866,7 +881,7 @@ pub fn modern_dropdown_select_sized(
                 });
         },
     );
-    (dropdown_resp, picked)
+    picked
 }
 
 pub fn modern_toggle_pill(
