@@ -182,8 +182,8 @@ impl EntropyApp {
             egui::Align2::CENTER_CENTER,
             app_layout_text(
                 language,
-                "Настройте автоматическое переключение раскладок Macropad для приложений",
-                "Configure automatic Macropad layout switching for applications",
+                "Настройте автоматическое переключение раскладок для приложений",
+                "Configure automatic layout switching for applications",
             ),
             egui::FontId::proportional(metrics.value(13.0)),
             app_muted_text(dark),
