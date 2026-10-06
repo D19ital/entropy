@@ -173,7 +173,7 @@ impl EntropyApp {
         ui.painter().text(
             egui::pos2(center_x, title_y),
             egui::Align2::CENTER_CENTER,
-            app_layout_text(language, "Раскладки приложений", "Application layouts"),
+            app_layout_text(language, "Автослой", "Autolayer"),
             egui::FontId::proportional(metrics.value(18.0)),
             ui.visuals().text_color(),
         );
@@ -182,8 +182,8 @@ impl EntropyApp {
             egui::Align2::CENTER_CENTER,
             app_layout_text(
                 language,
-                "Автоматически меняйте клавиши и энкодер для приложения в фокусе",
-                "Automatically switch keys and encoder for the focused application",
+                "Настройте автоматическое переключение раскладок Macropad для приложений",
+                "Configure automatic Macropad layout switching for applications",
             ),
             egui::FontId::proportional(metrics.value(13.0)),
             app_muted_text(dark),
@@ -280,6 +280,14 @@ impl EntropyApp {
                 .cmp(&left_default)
                 .then_with(|| left.1.to_lowercase().cmp(&right.1.to_lowercase()))
         });
+        let layout_labels = layouts
+            .iter()
+            .map(|(_, name)| name.clone())
+            .collect::<Vec<_>>();
+        let selected_layout_index = layouts
+            .iter()
+            .position(|(id, _)| id == &selected_id)
+            .unwrap_or(0);
         let selected_name = snapshot
             .editor_layout()
             .map(|layout| layout.name.clone())
@@ -471,22 +479,19 @@ impl EntropyApp {
                     control_height,
                     control_font,
                 );
-                crate::ui_style::popup_below_widget(
+                let picked = crate::ui_style::modern_dropdown_popup_options_with_max_height(
                     ui,
                     dropdown_id,
                     &dropdown,
-                    egui::PopupCloseBehavior::CloseOnClickOutside,
-                    |ui| {
-                        ui.set_min_width(control_width);
-                        ui.spacing_mut().item_spacing = egui::vec2(0.0, 2.0);
-                        for (id, name) in &layouts {
-                            if ui.selectable_label(selected_id == *id, name).clicked() {
-                                selected_id = id.clone();
-                                egui::Popup::close_id(ui.ctx(), dropdown_id);
-                            }
-                        }
-                    },
+                    &layout_labels,
+                    selected_layout_index,
+                    control_width,
+                    control_font,
+                    metrics.value(300.0),
                 );
+                if let Some(index) = picked {
+                    selected_id = layouts[index].0.clone();
+                }
                 let can_rename =
                     selected_id != crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID;
                 let clicked_name = dropdown.clicked()
