@@ -1,4 +1,3 @@
-use super::application_layout_runtime::app_layout_text;
 use super::*;
 
 impl EntropyApp {
@@ -36,8 +35,11 @@ impl EntropyApp {
                 + combo_supported as usize
                 + auto_shift_supported as usize
                 + key_override_supported as usize;
-            let mut advanced_menu_labels =
-                vec![crate::i18n::tr_catalog(lang, "text_expander.title")];
+            let mut advanced_menu_labels = Vec::new();
+            if show_application_layouts_item {
+                advanced_menu_labels.push("Autolayer");
+            }
+            advanced_menu_labels.push(crate::i18n::tr_catalog(lang, "text_expander.title"));
             advanced_menu_labels.push(crate::i18n::tr_catalog(lang, "typing_trainer.title"));
             if macro_supported {
                 advanced_menu_labels.push(crate::i18n::tr_catalog(lang, "macro_editor.title"));
@@ -54,17 +56,14 @@ impl EntropyApp {
             if key_override_supported {
                 advanced_menu_labels.push(crate::i18n::tr(lang, TrKey::KeyOverridesTitle));
             }
-            if show_application_layouts_item {
-                advanced_menu_labels.push(app_layout_text(
-                    lang,
-                    "Раскладки приложений",
-                    "Application layouts",
-                ));
-            }
             let advanced_dropdown_width =
                 adaptive_top_icon_dropdown_width(ui, advanced_menu_labels, 152.0);
-            // Entropy tools work without a device. The rest is stored in firmware.
-            let dividers = top_menu_dividers([2, advanced_item_count - 2]);
+            // Keep Entropy tools in their own icon group after Autolayer.
+            let dividers = top_menu_dividers([
+                2,
+                advanced_item_count - 2 - show_application_layouts_item as usize,
+            ]);
+            let divider_count = dividers[0] as usize + show_application_layouts_item as usize;
             let dropdown_rect = egui::Rect::from_min_size(
                 egui::pos2(
                     advanced_rect.center().x - advanced_dropdown_width / 2.0,
@@ -72,7 +71,7 @@ impl EntropyApp {
                 ),
                 Vec2::new(
                     advanced_dropdown_width,
-                    top_dropdown_height(advanced_item_count, dividers[0] as usize),
+                    top_dropdown_height(advanced_item_count, divider_count),
                 ),
             );
             let hover_bridge_rect = advanced_rect.union(dropdown_rect).expand(3.0);
@@ -104,6 +103,20 @@ impl EntropyApp {
                     dropdown_rect.min,
                     |ui| {
                         ui.set_min_width(item_width);
+                        let application_layouts_resp = show_application_layouts_item.then(|| {
+                            top_dropdown_icon_item(
+                                ui,
+                                item_width,
+                                TopMenuIcon::ApplicationLayouts,
+                                "Autolayer",
+                                true,
+                                self.main_menu_tab == MainMenuTab::Advanced
+                                    && self.settings_tab == SettingsTab::ApplicationLayouts,
+                            )
+                        });
+                        if show_application_layouts_item {
+                            top_dropdown_divider(ui, item_width);
+                        }
                         let text_expander_resp = top_dropdown_icon_item(
                             ui,
                             item_width,
@@ -178,21 +191,6 @@ impl EntropyApp {
                                 true,
                                 self.main_menu_tab == MainMenuTab::Advanced
                                     && self.settings_tab == SettingsTab::KeyOverrides,
-                            )
-                        });
-                        let application_layouts_resp = show_application_layouts_item.then(|| {
-                            top_dropdown_icon_item(
-                                ui,
-                                item_width,
-                                TopMenuIcon::ApplicationLayouts,
-                                app_layout_text(
-                                    lang,
-                                    "Раскладки приложений",
-                                    "Application layouts",
-                                ),
-                                true,
-                                self.main_menu_tab == MainMenuTab::Advanced
-                                    && self.settings_tab == SettingsTab::ApplicationLayouts,
                             )
                         });
                         if text_expander_resp.clicked() {
@@ -371,10 +369,10 @@ mod tests {
                 },
             )
         };
-        let label_pos = |output: &egui::FullOutput| {
+        let label_pos = |output: &egui::FullOutput, label: &str| {
             output.shapes.iter().find_map(|shape| match &shape.shape {
                 egui::Shape::Text(text)
-                    if text.galley.text() == "Application layouts"
+                    if text.galley.text() == label
                         && shape.clip_rect.intersects(text.visual_bounding_rect()) =>
                 {
                     Some(text.visual_bounding_rect().center())
@@ -384,12 +382,19 @@ mod tests {
         };
         let config = draw(&mut app, false, vec![]);
         assert!(
-            label_pos(&config).is_none(),
+            label_pos(&config, "Autolayer").is_none(),
             "Config no longer shows this item"
         );
         draw(&mut app, true, vec![]);
         let advanced = draw(&mut app, true, vec![]);
-        let pos = label_pos(&advanced).expect("Advanced exposes Application layouts");
+        let pos = label_pos(&advanced, "Autolayer").expect("Advanced exposes Autolayer");
+        let expander_label =
+            crate::i18n::tr_catalog(crate::i18n::Language::English, "text_expander.title");
+        assert!(
+            pos.y < label_pos(&advanced, expander_label).unwrap().y,
+            "Autolayer is the first Advanced item"
+        );
+        assert!(label_pos(&advanced, "Application layouts").is_none());
         for pressed in [true, false] {
             draw(
                 &mut app,
