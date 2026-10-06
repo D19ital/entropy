@@ -729,7 +729,8 @@ impl EntropyApp {
                             egui::Color32::from_rgb(220, 92, 76)
                         },
                     ))
-                    .truncate(),
+                    .truncate()
+                    .halign(egui::Align::RIGHT),
                 )
                 .on_hover_text(&detector_details);
             },
@@ -857,7 +858,8 @@ impl EntropyApp {
                             .size(control_font)
                             .color(app_muted_text(ui.visuals().dark_mode)),
                     )
-                    .truncate(),
+                    .truncate()
+                    .halign(egui::Align::RIGHT),
                 );
             },
         );
@@ -890,7 +892,8 @@ impl EntropyApp {
                             .size(control_font)
                             .color(app_muted_text(ui.visuals().dark_mode)),
                     )
-                    .truncate(),
+                    .truncate()
+                    .halign(egui::Align::RIGHT),
                 );
             },
         );
