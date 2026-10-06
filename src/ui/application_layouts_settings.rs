@@ -235,18 +235,33 @@ impl EntropyApp {
             }
 
             self.ensure_application_layout_settings();
+            let action_size = metrics.size(126.0, 34.0);
+            let action_gap = metrics.value(10.0);
+            let footer_gap = metrics.value(26.0);
+            let viewport_height = (body_rect.height() - footer_gap - action_size.y)
+                .min(metrics.settings_row_height() * 6.0)
+                .max(metrics.settings_row_height());
+            let viewport = egui::Rect::from_min_size(
+                body_rect.min,
+                egui::vec2(content_width, viewport_height),
+            );
             crate::ui_style::allocate_ui_at_rect(ui, body_rect, |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt("application_layouts_settings")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        crate::ui_style::modal_content(
-                            ui,
-                            crate::ui_style::ModalLayout::new(content_width)
-                                .with_top_padding(metrics.value(4.0)),
-                            |ui| self.draw_application_layouts_editor(ui, metrics),
-                        );
-                    });
+                crate::ui_style::allocate_ui_at_rect(ui, viewport, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("application_layouts_settings")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            crate::ui_style::modal_content(
+                                ui,
+                                crate::ui_style::ModalLayout::new(content_width)
+                                    .with_top_padding(metrics.value(4.0)),
+                                |ui| self.draw_application_layouts_editor(ui, metrics),
+                            );
+                        });
+                });
+                let action_rect =
+                    fixed_settings_action_bar_rect(viewport, metrics, action_size, 2, action_gap);
+                self.draw_application_layouts_actions(ui, action_rect, metrics);
             });
         });
         self.draw_application_picker_v2(ui.ctx());
@@ -353,7 +368,6 @@ impl EntropyApp {
             },
         );
         let mut changed = false;
-        let mut deleted_layout = false;
         if let Some(settings) = self.app_settings.application_layouts.get_mut(&device_key) {
             if settings.automatic_switching_enabled != automatic_switching_enabled {
                 settings.automatic_switching_enabled = automatic_switching_enabled;
@@ -602,62 +616,82 @@ impl EntropyApp {
                     }
                 },
             );
-
-            ui.add_space(metrics.value(20.0));
-            let action_size = metrics.size(126.0, 34.0);
-            let action_gap = metrics.value(10.0);
-            let (action_bar_rect, _) =
-                ui.allocate_exact_size(egui::vec2(row_width, action_size.y), egui::Sense::hover());
-            let actions = centered_button_pair_geometry(action_bar_rect, action_size, action_gap);
-            let add_response = crate::ui_style::allocate_ui_at_rect(ui, actions.leading, |ui| {
-                crate::ui_style::modern_button(
-                    ui,
-                    app_layout_text(language, "Добавить…", "Add…"),
-                    actions.leading.size(),
-                    true,
-                )
-            })
-            .inner
-            .on_hover_text(app_layout_text(
-                language,
-                "Создать новую раскладку для запущенного приложения",
-                "Create a new layout for a running application",
-            ));
-            if add_response.clicked() {
-                self.open_application_picker(false);
-            }
-            let delete_response =
-                crate::ui_style::allocate_ui_at_rect(ui, actions.trailing, |ui| {
-                    crate::ui_style::modern_button(
-                        ui,
-                        app_layout_text(language, "Удалить", "Delete"),
-                        actions.trailing.size(),
-                        !is_default,
-                    )
-                })
-                .inner
-                .on_hover_text(if is_default {
-                    app_layout_text(
-                        language,
-                        "Default нельзя удалить",
-                        "Default cannot be deleted",
-                    )
-                } else {
-                    app_layout_text(
-                        language,
-                        "Удалить выбранную раскладку приложения",
-                        "Delete the selected application layout",
-                    )
-                });
-            if delete_response.clicked() {
-                if let Some(settings) = self.app_settings.application_layouts.get_mut(&device_key) {
-                    deleted_layout = settings.remove(&selected.id);
-                    changed |= deleted_layout;
-                }
-            }
         }
 
-        if deleted_layout {
+        if changed {
+            save_app_settings(&self.app_settings);
+        }
+    }
+
+    fn draw_application_layouts_actions(
+        &mut self,
+        ui: &mut egui::Ui,
+        action_rect: egui::Rect,
+        metrics: crate::ui_style::ResponsiveMetrics,
+    ) {
+        let Some(device_key) = self.application_layout_device_key() else {
+            return;
+        };
+        let Some(selected) = self
+            .app_settings
+            .application_layouts
+            .get(&device_key)
+            .and_then(|settings| settings.editor_layout())
+        else {
+            return;
+        };
+        let selected_id = selected.id.clone();
+        let is_default = selected_id == crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID;
+        let language = self.app_settings.language;
+        let action_size = metrics.size(126.0, 34.0);
+        let action_gap = metrics.value(10.0);
+        let actions = centered_button_pair_geometry(action_rect, action_size, action_gap);
+        let add_response = crate::ui_style::allocate_ui_at_rect(ui, actions.leading, |ui| {
+            crate::ui_style::modern_button(
+                ui,
+                app_layout_text(language, "Добавить…", "Add…"),
+                actions.leading.size(),
+                true,
+            )
+        })
+        .inner
+        .on_hover_text(app_layout_text(
+            language,
+            "Создать новую раскладку для запущенного приложения",
+            "Create a new layout for a running application",
+        ));
+        if add_response.clicked() {
+            self.open_application_picker(false);
+        }
+        let delete_response = crate::ui_style::allocate_ui_at_rect(ui, actions.trailing, |ui| {
+            crate::ui_style::modern_button(
+                ui,
+                app_layout_text(language, "Удалить", "Delete"),
+                actions.trailing.size(),
+                !is_default,
+            )
+        })
+        .inner
+        .on_hover_text(if is_default {
+            app_layout_text(
+                language,
+                "Default нельзя удалить",
+                "Default cannot be deleted",
+            )
+        } else {
+            app_layout_text(
+                language,
+                "Удалить выбранную раскладку приложения",
+                "Delete the selected application layout",
+            )
+        });
+        if delete_response.clicked()
+            && self
+                .app_settings
+                .application_layouts
+                .get_mut(&device_key)
+                .is_some_and(|settings| settings.remove(&selected_id))
+        {
             // Deletion can change both the active and editor profiles without a
             // foreground-window event. Invalidate the cached source so the next
             // runtime tick resolves the currently focused app from stable IDs.
@@ -669,9 +703,6 @@ impl EntropyApp {
             self.selected_key = None;
             self.selected_encoder = None;
             self.reset_matrix_tester_state();
-        }
-
-        if changed {
             save_app_settings(&self.app_settings);
         }
     }
@@ -1607,6 +1638,69 @@ mod tests {
             app.application_layout_settings().unwrap().active_layout_id,
             "default"
         );
+    }
+
+    #[test]
+    fn page_actions_stay_fixed_while_settings_rows_scroll() {
+        let mut app = EntropyApp::new_inert_for_test();
+        app.app_settings.language = crate::i18n::Language::English;
+        let device_key = "offline-macropad-fixed-actions-test".to_owned();
+        app.app_settings.application_layouts.insert(
+            device_key.clone(),
+            crate::application_layouts::DeviceApplicationLayouts::default(),
+        );
+        app.app_settings.last_application_layout_device_key = Some(device_key);
+        let ctx = egui::Context::default();
+        let frame = |app: &mut EntropyApp, events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 650.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.draw_application_layouts_settings_page(ui, ui.max_rect()),
+            )
+        };
+        let position = |output: &egui::FullOutput, label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text)
+                        if text.galley.text() == label
+                            && clipped.clip_rect.intersects(text.visual_bounding_rect()) =>
+                    {
+                        Some(text.visual_bounding_rect().center())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing visible {label}"))
+        };
+        let before = frame(&mut app, vec![]);
+        let add = position(&before, "Add…");
+        let delete = position(&before, "Delete");
+        let row = position(&before, "Window detector");
+        let mut after = frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(egui::pos2(450.0, 280.0)),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -210.0),
+                    modifiers: egui::Modifiers::NONE,
+                    phase: egui::TouchPhase::Move,
+                },
+            ],
+        );
+        for _ in 0..6 {
+            after = frame(&mut app, vec![]);
+        }
+        assert!(position(&after, "Window detector").y < row.y - 10.0);
+        assert!((position(&after, "Add…").y - add.y).abs() < 1.0);
+        assert!((position(&after, "Delete").y - delete.y).abs() < 1.0);
     }
 
     #[test]
