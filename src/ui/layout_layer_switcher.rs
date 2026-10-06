@@ -86,15 +86,16 @@ impl EntropyApp {
             26.0
         };
         let name_font = FontId::proportional(name_size);
-        let name_extent = ui.fonts_mut(|fonts| {
-            fonts
-                .layout_no_wrap(visible_name.clone(), name_font.clone(), Color32::WHITE)
-                .size()
+        let name_galley = ui.fonts_mut(|fonts| {
+            fonts.layout_no_wrap(visible_name.clone(), name_font.clone(), Color32::WHITE)
         });
+        let name_extent = name_galley.size();
         let chevron_half_width = 4.5;
         let chevron_x = center_x + name_extent.x / 2.0 + 9.0 + chevron_half_width;
-        // Align the chevron tip with the bottom of the rendered name, not its center.
-        let chevron_y = center_y + name_extent.y / 2.0 - 2.5;
+        // The galley line box extends below the visible glyphs. Align to the
+        // actual text mesh instead of its padded line-box bottom.
+        let name_ink_bottom = center_y - name_extent.y / 2.0 + name_galley.mesh_bounds.max.y;
+        let chevron_y = name_ink_bottom - 2.5;
         // Keep the name centered; fit the shared click target tightly around
         // both glyphs instead of reserving space for the longest possible name.
         let selector_rect = egui::Rect::from_min_max(
@@ -728,7 +729,11 @@ mod tests {
             .flat_map(|(points, _)| points.iter())
             .map(|p| p.y)
             .fold(f32::NEG_INFINITY, f32::max);
-        assert!((chevron_tip - (name.pos.y + name.galley.size().y)).abs() < 1.0);
+        let ink_bottom = name.visual_bounding_rect().bottom();
+        assert!(
+            (chevron_tip - ink_bottom).abs() < 1.0,
+            "chevron tip {chevron_tip} versus visible text bottom {ink_bottom}"
+        );
         let arrow_click = egui::pos2(chevron_left + 4.5, chevron_tip - 2.5);
 
         // The former left-arrow area no longer changes profiles or opens the menu.
