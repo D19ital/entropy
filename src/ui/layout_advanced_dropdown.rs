@@ -58,12 +58,11 @@ impl EntropyApp {
             }
             let advanced_dropdown_width =
                 adaptive_top_icon_dropdown_width(ui, advanced_menu_labels, 152.0);
-            // Keep Entropy tools in their own icon group after Autolayer.
+            // Entropy tools share the first group; firmware features follow.
             let dividers = top_menu_dividers([
-                2,
+                2 + show_application_layouts_item as usize,
                 advanced_item_count - 2 - show_application_layouts_item as usize,
             ]);
-            let divider_count = dividers[0] as usize + show_application_layouts_item as usize;
             let dropdown_rect = egui::Rect::from_min_size(
                 egui::pos2(
                     advanced_rect.center().x - advanced_dropdown_width / 2.0,
@@ -71,7 +70,7 @@ impl EntropyApp {
                 ),
                 Vec2::new(
                     advanced_dropdown_width,
-                    top_dropdown_height(advanced_item_count, divider_count),
+                    top_dropdown_height(advanced_item_count, dividers[0] as usize),
                 ),
             );
             let hover_bridge_rect = advanced_rect.union(dropdown_rect).expand(3.0);
@@ -114,9 +113,6 @@ impl EntropyApp {
                                     && self.settings_tab == SettingsTab::ApplicationLayouts,
                             )
                         });
-                        if show_application_layouts_item {
-                            top_dropdown_divider(ui, item_width);
-                        }
                         let text_expander_resp = top_dropdown_icon_item(
                             ui,
                             item_width,
@@ -393,6 +389,12 @@ mod tests {
         assert!(
             pos.y < label_pos(&advanced, expander_label).unwrap().y,
             "Autolayer is the first Advanced item"
+        );
+        assert!(
+            (label_pos(&advanced, expander_label).unwrap().y - pos.y - TOP_DROPDOWN_ITEM_HEIGHT)
+                .abs()
+                < 4.0,
+            "Autolayer and Text Expander share a group without a divider"
         );
         assert!(label_pos(&advanced, "Application layouts").is_none());
         for pressed in [true, false] {
