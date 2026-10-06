@@ -360,7 +360,7 @@ impl EntropyApp {
             ui,
             row_width,
             row_height,
-            app_layout_text(language, "Автопереключение", "Automatic switching"),
+            app_layout_text(language, "Включить", "Enable"),
             true,
             Some(app_layout_text(language,
                 "OFF: фокус окна не меняет ручной выбор. ON: действуют правила приложений",
