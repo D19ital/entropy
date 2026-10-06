@@ -1,3 +1,4 @@
+use super::application_layout_runtime::app_layout_text;
 use super::*;
 
 impl EntropyApp {
@@ -25,9 +26,11 @@ impl EntropyApp {
             let tap_dance_supported = self.keycode_picker.supports_tap_dance
                 && !self.keycode_picker.tap_dance_entries.is_empty();
             let key_override_supported = !self.key_override_entries.is_empty();
+            let show_application_layouts_item = self.application_layouts_supported();
             let auto_shift_supported =
                 self.auto_shift_timeout.is_some() || self.supported_qmk_settings.contains(&4);
             let advanced_item_count = 2
+                + show_application_layouts_item as usize
                 + macro_supported as usize
                 + tap_dance_supported as usize
                 + combo_supported as usize
@@ -50,6 +53,13 @@ impl EntropyApp {
             }
             if key_override_supported {
                 advanced_menu_labels.push(crate::i18n::tr(lang, TrKey::KeyOverridesTitle));
+            }
+            if show_application_layouts_item {
+                advanced_menu_labels.push(app_layout_text(
+                    lang,
+                    "Раскладки приложений",
+                    "Application layouts",
+                ));
             }
             let advanced_dropdown_width =
                 adaptive_top_icon_dropdown_width(ui, advanced_menu_labels, 152.0);
@@ -86,6 +96,7 @@ impl EntropyApp {
                     combo_hovered,
                     auto_shift_hovered,
                     key_override_hovered,
+                    application_layouts_hovered,
                     advanced_clicked,
                 ) = show_top_dropdown(
                     ui.ctx(),
@@ -169,6 +180,21 @@ impl EntropyApp {
                                     && self.settings_tab == SettingsTab::KeyOverrides,
                             )
                         });
+                        let application_layouts_resp = show_application_layouts_item.then(|| {
+                            top_dropdown_icon_item(
+                                ui,
+                                item_width,
+                                TopMenuIcon::ApplicationLayouts,
+                                app_layout_text(
+                                    lang,
+                                    "Раскладки приложений",
+                                    "Application layouts",
+                                ),
+                                true,
+                                self.main_menu_tab == MainMenuTab::Advanced
+                                    && self.settings_tab == SettingsTab::ApplicationLayouts,
+                            )
+                        });
                         if text_expander_resp.clicked() {
                             self.close_top_dropdowns(ui.ctx());
                             self.open_text_expander_settings_page();
@@ -217,6 +243,13 @@ impl EntropyApp {
                             self.settings_tab = SettingsTab::KeyOverrides;
                             self.main_menu_tab = MainMenuTab::Advanced;
                         }
+                        if application_layouts_resp
+                            .as_ref()
+                            .is_some_and(|response| response.clicked())
+                        {
+                            self.close_top_dropdowns(ui.ctx());
+                            self.open_application_layouts_page();
+                        }
                         (
                             text_expander_resp.hovered(),
                             typing_trainer_resp.hovered(),
@@ -234,6 +267,9 @@ impl EntropyApp {
                                 .as_ref()
                                 .map(|r| r.hovered())
                                 .unwrap_or(false),
+                            application_layouts_resp
+                                .as_ref()
+                                .is_some_and(|response| response.hovered()),
                             text_expander_resp.clicked()
                                 || typing_trainer_resp.clicked()
                                 || macro_resp.as_ref().map(|r| r.clicked()).unwrap_or(false)
@@ -249,7 +285,10 @@ impl EntropyApp {
                                 || key_override_resp
                                     .as_ref()
                                     .map(|r| r.clicked())
-                                    .unwrap_or(false),
+                                    .unwrap_or(false)
+                                || application_layouts_resp
+                                    .as_ref()
+                                    .is_some_and(|response| response.clicked()),
                         )
                     },
                 )
@@ -266,6 +305,7 @@ impl EntropyApp {
                                 || combo_hovered
                                 || auto_shift_hovered
                                 || key_override_hovered
+                                || application_layouts_hovered
                                 || pointer_over_bridge),
                     )
                 });
@@ -279,6 +319,95 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn application_layouts_move_from_config_to_advanced() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        let device_key = "offline-macropad-test".to_owned();
+        app.app_settings.application_layouts.insert(
+            device_key.clone(),
+            crate::application_layouts::DeviceApplicationLayouts::default(),
+        );
+        app.app_settings.last_application_layout_device_key = Some(device_key);
+        let layout = KeyboardLayout::from_vial_json(&serde_json::json!({
+            "name": "Test keyboard",
+            "matrix": { "rows": 1, "cols": 1 },
+            "layouts": { "keymap": [["0,0"]] }
+        }))
+        .unwrap();
+        let tab = egui::Rect::from_min_size(egui::pos2(400.0, 10.0), egui::vec2(100.0, 32.0));
+        let draw = |app: &mut EntropyApp, advanced: bool, events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    if advanced {
+                        app.draw_layout_advanced_dropdown(
+                            ui,
+                            crate::i18n::Language::English,
+                            Some(tab),
+                            false,
+                            true,
+                            false,
+                        );
+                    } else {
+                        app.draw_layout_settings_dropdown(
+                            ui,
+                            &layout,
+                            crate::i18n::Language::English,
+                            Some(tab),
+                            false,
+                            false,
+                            true,
+                        );
+                    }
+                },
+            )
+        };
+        let label_pos = |output: &egui::FullOutput| {
+            output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text)
+                    if text.galley.text() == "Application layouts"
+                        && shape.clip_rect.intersects(text.visual_bounding_rect()) =>
+                {
+                    Some(text.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+        };
+        let config = draw(&mut app, false, vec![]);
+        assert!(
+            label_pos(&config).is_none(),
+            "Config no longer shows this item"
+        );
+        draw(&mut app, true, vec![]);
+        let advanced = draw(&mut app, true, vec![]);
+        let pos = label_pos(&advanced).expect("Advanced exposes Application layouts");
+        for pressed in [true, false] {
+            draw(
+                &mut app,
+                true,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert!(app.settings_tab == SettingsTab::ApplicationLayouts);
+        assert!(app.main_menu_tab == MainMenuTab::Advanced);
+    }
 
     #[test]
     fn locked_vial_macro_menu_click_opens_unlock_preflight() {

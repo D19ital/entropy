@@ -215,7 +215,7 @@ impl EntropyApp {
     pub(super) fn open_application_layouts_page(&mut self) {
         self.application_layout_editor_active = false;
         self.settings_tab = SettingsTab::ApplicationLayouts;
-        self.main_menu_tab = MainMenuTab::Settings;
+        self.main_menu_tab = MainMenuTab::Advanced;
     }
 
     pub(super) fn open_text_expander_setup_page(&mut self) {

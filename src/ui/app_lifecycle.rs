@@ -1592,8 +1592,7 @@ impl eframe::App for EntropyApp {
                             )
                             .clicked()
                             {
-                                self.main_menu_tab = MainMenuTab::Settings;
-                                self.settings_tab = SettingsTab::ApplicationLayouts;
+                                self.open_application_layouts_page();
                             }
                         }
                     });
