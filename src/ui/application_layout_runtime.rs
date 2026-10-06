@@ -120,6 +120,41 @@ impl EntropyApp {
         layouts
     }
 
+    pub(super) fn application_layout_editor_grouped_options(
+        &self,
+        options: &[(String, String)],
+    ) -> Vec<(
+        crate::application_layouts::ApplicationLayoutCategory,
+        Vec<(String, String)>,
+    )> {
+        use crate::application_layouts::{
+            builtin_application_layout_presets, executables_match, ApplicationLayoutCategory,
+            DEFAULT_APPLICATION_LAYOUT_ID,
+        };
+        let presets = builtin_application_layout_presets();
+        let settings = self.application_layout_settings();
+        let mut groups = std::collections::BTreeMap::<_, Vec<_>>::new();
+        for (id, name) in options {
+            if id == DEFAULT_APPLICATION_LAYOUT_ID {
+                continue;
+            }
+            let category = settings
+                .and_then(|settings| settings.layouts.get(id))
+                .and_then(|layout| {
+                    presets
+                        .iter()
+                        .find(|preset| executables_match(&layout.executable, preset.executable))
+                })
+                .map(|preset| ApplicationLayoutCategory::for_preset_id(preset.id))
+                .unwrap_or(ApplicationLayoutCategory::Other);
+            groups
+                .entry(category)
+                .or_default()
+                .push((id.clone(), name.clone()));
+        }
+        groups.into_iter().collect()
+    }
+
     pub(super) fn activate_application_layout(&mut self, id: &str) -> bool {
         // Finish drafts against the profile where editing started before the
         // editor selection changes. Otherwise an application-focus transition

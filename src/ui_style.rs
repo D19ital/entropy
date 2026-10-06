@@ -57,6 +57,32 @@ pub fn popup_below_widget_with_width<R>(
     Some(response.inner)
 }
 
+/// Keep a hover submenu open while the pointer crosses the small gap between menus.
+pub fn pointer_over_submenu_bridge(
+    pointer: Option<egui::Pos2>,
+    row_rect: Option<egui::Rect>,
+    submenu_rect: Option<egui::Rect>,
+) -> bool {
+    let (Some(pointer), Some(row_rect), Some(submenu_rect)) = (pointer, row_rect, submenu_rect)
+    else {
+        return false;
+    };
+    let connector = if submenu_rect.left() >= row_rect.right() {
+        egui::Rect::from_min_max(
+            egui::pos2(row_rect.right() - 1.0, row_rect.top() - 3.0),
+            egui::pos2(submenu_rect.left() + 1.0, row_rect.bottom() + 3.0),
+        )
+    } else {
+        egui::Rect::from_min_max(
+            egui::pos2(submenu_rect.right() - 1.0, row_rect.top() - 3.0),
+            egui::pos2(row_rect.left() + 1.0, row_rect.bottom() + 3.0),
+        )
+    };
+    row_rect.expand(3.0).contains(pointer)
+        || submenu_rect.expand(3.0).contains(pointer)
+        || connector.contains(pointer)
+}
+
 pub fn panel_fill(dark: bool) -> Color32 {
     if dark {
         Color32::from_rgb(30, 30, 30)
@@ -820,7 +846,6 @@ pub fn modern_dropdown_popup_options_with_max_height(
     font_size: f32,
     viewport_max_height: f32,
 ) -> Option<usize> {
-    let dark = ui.visuals().dark_mode;
     let option_font = FontId::proportional(font_size);
     let longest_label_width = labels
         .iter()
@@ -858,36 +883,13 @@ pub fn modern_dropdown_popup_options_with_max_height(
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     for (idx, label) in labels.iter().enumerate() {
-                        let is_selected = idx == selected;
-                        let (option_rect, option_resp) = ui.allocate_exact_size(
-                            Vec2::new(popup_width, option_height),
-                            Sense::click(),
-                        );
-                        if option_resp.hovered() {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        }
-                        let option_fill = if is_selected {
-                            if dark {
-                                Color32::from_rgb(58, 58, 61)
-                            } else {
-                                Color32::from_rgb(236, 236, 238)
-                            }
-                        } else if option_resp.hovered() {
-                            hover_fill(dark)
-                        } else {
-                            Color32::TRANSPARENT
-                        };
-                        ui.painter().rect_filled(option_rect, 7.0, option_fill);
-                        ui.painter().text(
-                            egui::pos2(option_rect.left() + 10.0, option_rect.center().y),
-                            egui::Align2::LEFT_CENTER,
+                        let option_resp = modern_dropdown_option_row(
+                            ui,
                             label,
-                            option_font.clone(),
-                            if is_selected {
-                                ui.visuals().text_color()
-                            } else {
-                                muted_text(dark)
-                            },
+                            popup_width,
+                            &option_font,
+                            idx == selected,
+                            false,
                         );
                         if option_resp.clicked() {
                             picked = Some(idx);
@@ -895,6 +897,198 @@ pub fn modern_dropdown_popup_options_with_max_height(
                         }
                     }
                 });
+        },
+    );
+    picked
+}
+
+fn modern_dropdown_option_row(
+    ui: &mut Ui,
+    label: &str,
+    width: f32,
+    font: &FontId,
+    selected: bool,
+    submenu: bool,
+) -> egui::Response {
+    let dark = ui.visuals().dark_mode;
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 28.0), Sense::click());
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let fill = if selected {
+        if dark {
+            Color32::from_rgb(58, 58, 61)
+        } else {
+            Color32::from_rgb(236, 236, 238)
+        }
+    } else if response.hovered() {
+        hover_fill(dark)
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, 7.0, fill);
+    ui.painter().text(
+        egui::pos2(rect.left() + 10.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font.clone(),
+        if selected {
+            ui.visuals().text_color()
+        } else {
+            muted_text(dark)
+        },
+    );
+    if submenu {
+        ui.painter().text(
+            egui::pos2(rect.right() - 10.0, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            "›",
+            FontId::proportional(18.0),
+            if selected || response.hovered() {
+                accent()
+            } else {
+                muted_text(dark)
+            },
+        );
+    }
+    response
+}
+
+/// Compact category menu with hover submenus, using the same rows as flat dropdowns.
+pub fn modern_dropdown_grouped_options(
+    ui: &mut Ui,
+    id: egui::Id,
+    trigger: &egui::Response,
+    default: &(String, String),
+    groups: &[(String, Vec<(String, String)>)],
+    selected_id: &str,
+    min_width: f32,
+    font_size: f32,
+) -> Option<String> {
+    let font = FontId::proportional(font_size);
+    let max_label = std::iter::once(default.1.as_str())
+        .chain(groups.iter().map(|group| group.0.as_str()))
+        .map(|label| {
+            ui.painter()
+                .layout_no_wrap(label.to_owned(), font.clone(), ui.visuals().text_color())
+                .size()
+                .x
+        })
+        .fold(0.0_f32, f32::max);
+    let width = (max_label + 42.0).max(min_width);
+    let mut picked = None;
+    let active_id = id.with("active_category");
+    let row_id = id.with("category_row_rect");
+    let child_id = id.with("category_submenu_rect");
+    if !egui::Popup::is_id_open(ui.ctx(), id) {
+        ui.ctx().data_mut(|d| {
+            d.remove::<usize>(active_id);
+            d.remove::<egui::Rect>(child_id);
+        });
+    }
+    popup_below_widget_with_width(
+        ui,
+        id,
+        trigger,
+        egui::PopupCloseBehavior::CloseOnClickOutside,
+        width,
+        |ui| {
+            ui.set_min_width(width);
+            ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
+            let default_response = modern_dropdown_option_row(
+                ui,
+                &default.1,
+                width,
+                &font,
+                selected_id == default.0,
+                false,
+            );
+            if default_response.clicked() {
+                picked = Some(default.0.clone());
+                egui::Popup::close_all(ui.ctx());
+            }
+            let previous = ui.ctx().data(|d| d.get_temp::<usize>(active_id));
+            let pointer = ui.ctx().input(|i| i.pointer.hover_pos());
+            let old_row = ui.ctx().data(|d| d.get_temp::<egui::Rect>(row_id));
+            let old_child = ui.ctx().data(|d| d.get_temp::<egui::Rect>(child_id));
+            let mut hovered = None;
+            let mut rows = Vec::with_capacity(groups.len());
+            for (index, (label, _)) in groups.iter().enumerate() {
+                let response = modern_dropdown_option_row(
+                    ui,
+                    label,
+                    width,
+                    &font,
+                    previous == Some(index),
+                    true,
+                );
+                if response.hovered() || response.clicked() {
+                    hovered = Some(index);
+                }
+                rows.push(response);
+            }
+            let active = hovered.or_else(|| {
+                previous.filter(|_| pointer_over_submenu_bridge(pointer, old_row, old_child))
+            });
+            if let Some(index) = active {
+                let (label, entries) = &groups[index];
+                let row = &rows[index];
+                let child_width = entries
+                    .iter()
+                    .map(|(_, name)| {
+                        ui.painter()
+                            .layout_no_wrap(name.clone(), font.clone(), ui.visuals().text_color())
+                            .size()
+                            .x
+                    })
+                    .fold(0.0_f32, f32::max)
+                    .max(min_width - 24.0)
+                    .min((ui.ctx().content_rect().width() - 48.0).max(min_width - 24.0))
+                    + 24.0;
+                let submenu = egui::Popup::from_response(row)
+                    .id(id.with(("category_submenu", index)))
+                    .open(true)
+                    .align(egui::RectAlign::RIGHT_START)
+                    .gap(4.0)
+                    .width(child_width)
+                    .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
+                    .show(|ui| {
+                        ui.set_min_width(child_width);
+                        ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
+                        egui::ScrollArea::vertical()
+                            .id_salt(("modern_dropdown_category_scroll", id, label))
+                            .max_height((entries.len() as f32 * 30.0).min(300.0))
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                for (item_id, item_name) in entries {
+                                    let response = modern_dropdown_option_row(
+                                        ui,
+                                        item_name,
+                                        child_width,
+                                        &font,
+                                        selected_id == item_id,
+                                        false,
+                                    );
+                                    if response.clicked() {
+                                        picked = Some(item_id.clone());
+                                        egui::Popup::close_all(ui.ctx());
+                                    }
+                                }
+                            });
+                    });
+                ui.ctx().data_mut(|d| {
+                    d.insert_temp(active_id, index);
+                    d.insert_temp(row_id, row.rect);
+                    if let Some(submenu) = submenu {
+                        d.insert_temp(child_id, submenu.response.rect);
+                    }
+                });
+            } else {
+                ui.ctx().data_mut(|d| {
+                    d.remove::<usize>(active_id);
+                    d.remove::<egui::Rect>(child_id);
+                });
+            }
         },
     );
     picked

@@ -142,21 +142,45 @@ impl EntropyApp {
             arrow_color,
         );
 
-        let labels = options
-            .iter()
-            .map(|(_, name)| name.clone())
-            .collect::<Vec<_>>();
-        if let Some(index) = crate::ui_style::modern_dropdown_popup_options_with_max_height(
+        let language = self.app_settings.language;
+        let groups = if egui::Popup::is_id_open(ui.ctx(), dropdown_id) {
+            self.application_layout_editor_grouped_options(&options)
+                .into_iter()
+                .map(|(category, entries)| {
+                    use crate::application_layouts::ApplicationLayoutCategory as Category;
+                    let (ru, en) = match category {
+                        Category::Browsers => ("Браузеры", "Browsers"),
+                        Category::Development => ("Разработка", "Development"),
+                        Category::Graphics => ("Графика и 3D", "Graphics & 3D"),
+                        Category::Video => ("Видео и стриминг", "Video & streaming"),
+                        Category::Audio => ("Аудио", "Audio"),
+                        Category::Communication => ("Общение", "Communication"),
+                        Category::Other => ("Другие", "Other"),
+                    };
+                    (
+                        match language {
+                            crate::i18n::Language::Russian => ru,
+                            crate::i18n::Language::English => en,
+                        }
+                        .to_owned(),
+                        entries,
+                    )
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        if let Some(id) = crate::ui_style::modern_dropdown_grouped_options(
             ui,
             dropdown_id,
             &response,
-            &labels,
-            current_index,
+            &options[0],
+            &groups,
+            &current_id,
             selector_width,
             12.5,
-            300.0, // Ten compact options at 28px each with 2px row spacing.
         ) {
-            self.activate_application_layout(&options[index].0);
+            self.activate_application_layout(&id);
         }
     }
 
@@ -684,6 +708,14 @@ mod tests {
                 "",
             );
         }
+        settings.create_for_application_named(
+            &crate::application_layouts::DetectedApplication {
+                executable: "firefox".to_owned(),
+                ..Default::default()
+            },
+            Some("Firefox"),
+            "",
+        );
         app.app_settings
             .application_layouts
             .insert(device_key.clone(), settings);
@@ -806,13 +838,49 @@ mod tests {
         }
         assert!(egui::Popup::is_id_open(&ctx, popup_id));
 
-        // This selector uses the same compact, scrollable rows as other modern
-        // dropdowns instead of rendering all application names as egui labels.
+        // Default stays at the first level; the programs are behind a category
+        // that opens beside it on hover, as in Layer operations.
         let (_, popup) = frame(
             &mut app,
             vec![egui::Event::PointerMoved(egui::pos2(50.0, 50.0))],
         );
-        let visible_names = popup
+        let category_pos = popup
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if matches!(text.galley.text(), "Other" | "Другие") => {
+                    Some(text.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .expect("uncategorized applications appear as a submenu category");
+        let browsers_pos = popup
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text)
+                    if matches!(text.galley.text(), "Browsers" | "Браузеры") =>
+                {
+                    Some(text.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .expect("known browser preset must appear as a category");
+        assert!(popup.shapes.iter().any(|shape| matches!(
+            &shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "Default"
+                && shape.clip_rect.intersects(text.visual_bounding_rect())
+        )));
+        frame(&mut app, vec![egui::Event::PointerMoved(browsers_pos)]);
+        let (_, browser_submenu) = frame(&mut app, vec![]);
+        assert!(browser_submenu.shapes.iter().any(|shape| matches!(
+            &shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "Firefox"
+                && shape.clip_rect.intersects(text.visual_bounding_rect())
+        )));
+        frame(&mut app, vec![egui::Event::PointerMoved(category_pos)]);
+        let (_, submenu) = frame(&mut app, vec![]);
+        let visible_names = submenu
             .shapes
             .iter()
             .filter_map(|shape| match &shape.shape {
@@ -827,15 +895,100 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             visible_names.len(),
-            9,
-            "ten options (Default + nine applications) must be visible: {visible_names:?}"
+            10,
+            "ten programs must be visible in the category submenu: {visible_names:?}"
         );
         assert!(!visible_names.contains(&"Application 9".to_owned()));
-        assert!(popup.shapes.iter().any(|shape| matches!(
-            &shape.shape,
-            egui::Shape::Text(text) if text.galley.text() == "Default"
-                && shape.clip_rect.intersects(text.visual_bounding_rect())
-        )));
+        let choice = submenu
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Application 0" => {
+                    Some(text.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .unwrap();
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(choice),
+                    egui::Event::PointerButton {
+                        pos: choice,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert_eq!(
+            app.application_layout_settings()
+                .unwrap()
+                .active_layout()
+                .unwrap()
+                .name,
+            "Application 0"
+        );
+    }
+
+    #[test]
+    fn application_selector_groups_known_programs_and_other_layouts() {
+        use crate::application_layouts::{
+            ApplicationLayoutCategory as Category, DetectedApplication,
+        };
+        let mut app = EntropyApp::new_inert_for_test();
+        let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+        for (executable, name) in [
+            ("firefox", "Firefox"),
+            ("code", "Code"),
+            ("blender", "Blender"),
+            ("obs", "OBS"),
+            ("audacity", "Audacity"),
+            ("Discord", "Discord"),
+            ("custom-tool", "Custom Tool"),
+        ] {
+            settings.create_for_application_named(
+                &DetectedApplication {
+                    executable: executable.to_owned(),
+                    ..Default::default()
+                },
+                Some(name),
+                "",
+            );
+        }
+        let key = "offline-macropad-test".to_owned();
+        app.app_settings
+            .application_layouts
+            .insert(key.clone(), settings);
+        app.app_settings.last_application_layout_device_key = Some(key);
+        let groups =
+            app.application_layout_editor_grouped_options(&app.application_layout_editor_options());
+        let summary = groups
+            .iter()
+            .map(|(category, entries)| {
+                (
+                    *category,
+                    entries
+                        .iter()
+                        .map(|(_, name)| name.as_str())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            summary,
+            vec![
+                (Category::Browsers, vec!["Firefox"]),
+                (Category::Development, vec!["Code"]),
+                (Category::Graphics, vec!["Blender"]),
+                (Category::Video, vec!["OBS"]),
+                (Category::Audio, vec!["Audacity"]),
+                (Category::Communication, vec!["Discord"]),
+                (Category::Other, vec!["Custom Tool"]),
+            ]
+        );
     }
 
     #[test]

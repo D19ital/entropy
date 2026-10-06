@@ -11,6 +11,38 @@ pub(crate) const APPLICATION_LAYOUT_STACK_SLOTS: usize = 4;
 pub(crate) const APPLICATION_LAYOUT_STACK_NAME_BYTES: usize = 12;
 pub(crate) const APPLICATION_LAYOUT_NAME_BYTES: usize = 22;
 
+/// UI grouping for known application presets. This is derived from the
+/// application identity, not saved into firmware or user layout settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ApplicationLayoutCategory {
+    Browsers,
+    Development,
+    Graphics,
+    Video,
+    Audio,
+    Communication,
+    Other,
+}
+
+impl ApplicationLayoutCategory {
+    pub(crate) fn for_preset_id(id: &str) -> Self {
+        match id {
+            "google_chrome" | "firefox" => Self::Browsers,
+            "visual_studio_code" | "visual_studio" | "intellij_idea" | "pycharm" => {
+                Self::Development
+            }
+            "blender" | "figma" | "krita" | "adobe_photoshop" | "adobe_illustrator" => {
+                Self::Graphics
+            }
+            "obs_studio" | "streamlabs_desktop" | "davinci_resolve" | "adobe_premiere_pro"
+            | "capcut" => Self::Video,
+            "audacity" | "vlc" => Self::Audio,
+            "discord" => Self::Communication,
+            _ => Self::Other,
+        }
+    }
+}
+
 const MOD_CTRL: u16 = 0x0100;
 const MOD_SHIFT: u16 = 0x0200;
 const MOD_ALT: u16 = 0x0400;
@@ -3989,5 +4021,21 @@ mod tests {
         assert_eq!(mac_firefox.layers[0].keycodes[4], MOD_GUI | 0x0030);
         assert_eq!(other_firefox.layers[0].keycodes[3], MOD_ALT | 0x0050);
         assert_eq!(other_firefox.layers[0].keycodes[4], MOD_ALT | 0x004F);
+    }
+
+    #[test]
+    fn all_builtin_application_presets_have_a_category() {
+        for preset in builtin_application_layout_presets() {
+            assert_ne!(
+                ApplicationLayoutCategory::for_preset_id(preset.id),
+                ApplicationLayoutCategory::Other,
+                "builtin preset {} must have a category",
+                preset.id
+            );
+        }
+        assert_eq!(
+            ApplicationLayoutCategory::for_preset_id("unknown_app"),
+            ApplicationLayoutCategory::Other
+        );
     }
 }
