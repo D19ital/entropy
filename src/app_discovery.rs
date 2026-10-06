@@ -884,7 +884,7 @@ fn install_gnome_shell_integration_detailed() -> Result<GnomeIntegrationInstallR
     let message = if active {
         "GNOME integration installed, enabled, and running".to_owned()
     } else {
-        "GNOME integration installed and enabled; sign out of Ubuntu and sign back in once"
+        "GNOME integration installed and enabled; sign out of your desktop session and sign back in once"
             .to_owned()
     };
     Ok(GnomeIntegrationInstallReport {

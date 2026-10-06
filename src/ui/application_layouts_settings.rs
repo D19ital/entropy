@@ -1059,8 +1059,8 @@ impl EntropyApp {
             Some(Ok(report)) if report.restart_required => (
                 app_layout_text(
                     language,
-                    "Установлено. Выйдите из Ubuntu и войдите снова",
-                    "Installed. Sign out of Ubuntu and sign back in",
+                    "Установлено. Выйдите из сеанса и войдите снова",
+                    "Installed. Sign out and sign back in",
                 )
                 .to_owned(),
                 egui::Color32::from_rgb(218, 164, 70),
@@ -1460,6 +1460,27 @@ mod tests {
             display_name: display_name.to_owned(),
             window_title: String::new(),
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnome_relogin_feedback_does_not_name_a_distribution() {
+        let mut app = EntropyApp::new_inert_for_test();
+        app.gnome_integration_install_result =
+            Some(Ok(crate::app_discovery::GnomeIntegrationInstallReport {
+                message: "GNOME integration installed and enabled".to_owned(),
+                enabled: true,
+                active: false,
+                restart_required: true,
+            }));
+        let english = app
+            .gnome_integration_install_feedback(crate::i18n::Language::English, true)
+            .0;
+        let russian = app
+            .gnome_integration_install_feedback(crate::i18n::Language::Russian, true)
+            .0;
+        assert_eq!(english, "Installed. Sign out and sign back in");
+        assert_eq!(russian, "Установлено. Выйдите из сеанса и войдите снова");
     }
 
     #[test]
