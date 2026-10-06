@@ -430,9 +430,8 @@ impl EntropyApp {
             }
         }
 
-        let next_row = self.draw_application_layouts_global_status(
+        let next_row = self.draw_application_layouts_detector_status(
             ui,
-            &device_key,
             language,
             row_width,
             row_height,
@@ -673,6 +672,18 @@ impl EntropyApp {
             }
         }
 
+        self.draw_application_layouts_runtime_status(
+            ui,
+            &device_key,
+            language,
+            row_width,
+            row_height,
+            control_width,
+            control_font,
+            next_row + 2,
+            &visible_rows,
+        );
+
         if changed {
             save_app_settings(&self.app_settings);
         }
@@ -763,10 +774,9 @@ impl EntropyApp {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn draw_application_layouts_global_status(
+    fn draw_application_layouts_detector_status(
         &mut self,
         ui: &mut egui::Ui,
-        device_key: &str,
         language: crate::i18n::Language,
         row_width: f32,
         row_height: f32,
@@ -887,6 +897,24 @@ impl EntropyApp {
             }
         }
 
+        row
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_application_layouts_runtime_status(
+        &mut self,
+        ui: &mut egui::Ui,
+        device_key: &str,
+        language: crate::i18n::Language,
+        row_width: f32,
+        row_height: f32,
+        control_width: f32,
+        control_font: f32,
+        first_row: usize,
+        visible_rows: &std::ops::Range<usize>,
+    ) {
+        let mut row = first_row;
+        let detector = &self.application_discovery.foreground_status;
         let foreground = match &detector.state {
             crate::app_discovery::ForegroundState::Focused(application) => application.label(),
             crate::app_discovery::ForegroundState::UnidentifiedWindow(title) => {
@@ -963,7 +991,6 @@ impl EntropyApp {
                 },
             );
         }
-        row + 1
     }
 
     #[cfg(target_os = "linux")]
@@ -1782,6 +1809,8 @@ mod tests {
             after = frame(&mut app, vec![]);
         }
         assert!(position(&after, "Window detector").y < row.y - 10.0);
+        assert!(position(&after, "Application").y < position(&after, "Focused application").y);
+        assert!(position(&after, "Focused application").y < position(&after, "Active layout").y);
         assert!((position(&after, "Add…").y - add.y).abs() < 1.0);
         assert!((position(&after, "Delete").y - delete.y).abs() < 1.0);
     }
