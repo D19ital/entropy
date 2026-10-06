@@ -179,7 +179,7 @@ impl EntropyApp {
 
         let language = self.app_settings.language;
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
-        let content_width = metrics.value(620.0);
+        let content_width = metrics.settings_content_width();
         let title_y = content_rect.top() + metrics.value(30.0);
         let description_y = title_y + metrics.value(28.0);
         let body_top = description_y + metrics.value(26.0);
@@ -315,7 +315,7 @@ impl EntropyApp {
         let mut automatically_return_to_default = snapshot.automatically_return_to_default;
         let mut automatic_switching_enabled = snapshot.automatic_switching_enabled;
 
-        let row_width = metrics.value(602.0);
+        let row_width = metrics.settings_row_content_width();
         let row_height = metrics.settings_row_height();
         let control_width = metrics.value(260.0);
         let control_height = metrics.settings_control_height();
@@ -1408,7 +1408,7 @@ mod tests {
             |ui| {
                 crate::ui_style::settings_list_row_with_tooltip(
                     ui,
-                    602.0,
+                    452.0,
                     54.0,
                     "Window detector",
                     true,
@@ -1435,6 +1435,52 @@ mod tests {
             (edge.get() - text_edge).abs() <= 4.0,
             "value right={text_edge}, row right={}",
             edge.get()
+        );
+    }
+
+    #[test]
+    fn standard_page_width_fits_status_labels_and_description() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
+                let page_width = metrics.settings_content_width();
+                let row_width = metrics.settings_row_content_width();
+                assert_eq!(page_width, 470.0);
+                assert_eq!(row_width, 452.0);
+                assert_eq!(metrics.settings_control_font_size(), 12.5);
+                let font = egui::FontId::proportional(13.0);
+                for description in [
+                    "Настройте автоматическое переключение раскладок для приложений",
+                    "Configure automatic layout switching for applications",
+                ] {
+                    let width = ui
+                        .painter()
+                        .layout_no_wrap(description.to_owned(), font.clone(), egui::Color32::WHITE)
+                        .size()
+                        .x;
+                    assert!(width <= page_width, "description width={width}");
+                }
+                for label in [
+                    "Приложение в фокусе",
+                    "Активная раскладка",
+                    "Focused application",
+                ] {
+                    let width = ui
+                        .painter()
+                        .layout_no_wrap(label.to_owned(), font.clone(), egui::Color32::WHITE)
+                        .size()
+                        .x;
+                    assert!(width + 4.0 <= row_width - 260.0, "{label}: width={width}");
+                }
+            },
         );
     }
 
