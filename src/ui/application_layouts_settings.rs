@@ -1090,8 +1090,9 @@ impl EntropyApp {
         let language = self.app_settings.language;
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ctx);
         let mut geometry = application_picker_geometry(ctx.content_rect().size(), metrics.scale);
-        geometry.list_height =
-            (geometry.list_height - metrics.value(96.0)).max(metrics.value(80.0));
+        let validation_height = metrics.value(38.0);
+        geometry.list_height = (geometry.list_height - metrics.value(96.0) - validation_height)
+            .max(metrics.value(80.0));
         let mut open = self.application_picker_open;
         let mut confirm = false;
         let mut cancel = false;
@@ -1298,18 +1299,6 @@ impl EntropyApp {
 
                     ui.add_space(metrics.value(12.0));
                     let duplicate_rule = self.application_picker_has_duplicate_rule();
-                    if duplicate_rule {
-                        ui.label(
-                            RichText::new(app_layout_text(
-                                language,
-                                "Для этого приложения уже создана раскладка",
-                                "A layout already exists for this application",
-                            ))
-                            .size(metrics.value(11.0))
-                            .color(egui::Color32::from_rgb(220, 92, 76)),
-                        );
-                        ui.add_space(metrics.value(6.0));
-                    }
                     let invalid_name = self.application_picker_selected.is_some()
                         && self.application_layout_settings().is_some_and(|settings| {
                             application_layout_name_is_invalid(
@@ -1318,12 +1307,28 @@ impl EntropyApp {
                                 &self.application_picker_name,
                             )
                         });
-                    if invalid_name {
-                        ui.label(RichText::new(app_layout_text(language,
+                    // Always allocate both validation rows so errors cannot move
+                    // the modal or its action buttons.
+                    for (show, ru, en) in [
+                        (
+                            duplicate_rule,
+                            "Для этого приложения уже создана раскладка",
+                            "A layout already exists for this application",
+                        ),
+                        (
+                            invalid_name,
                             "Введите уникальное непустое имя раскладки",
                             "Enter a unique, non-empty layout name",
-                        )).size(metrics.value(11.0)).color(egui::Color32::from_rgb(220, 92, 76)));
-                        ui.add_space(metrics.value(6.0));
+                        ),
+                    ] {
+                        ui.add_sized(
+                            egui::vec2(content_width, metrics.value(16.0)),
+                            egui::Label::new(
+                                RichText::new(if show { app_layout_text(language, ru, en) } else { "" })
+                                    .size(metrics.value(11.0))
+                                    .color(egui::Color32::from_rgb(220, 92, 76)),
+                            ),
+                        );
                     }
                     let can_confirm = self.application_picker_selected.is_some()
                         && !duplicate_rule
@@ -1975,6 +1980,89 @@ mod tests {
     }
 
     #[test]
+    fn application_picker_validation_does_not_resize_modal() {
+        let mut app = EntropyApp::new_inert_for_test();
+        app.app_settings.language = crate::i18n::Language::English;
+        let key = "offline-macropad-modal-error-height-test".to_owned();
+        let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+        settings.create_for_application(&detected_application("firefox", "Firefox"));
+        app.app_settings
+            .application_layouts
+            .insert(key.clone(), settings);
+        app.app_settings.last_application_layout_device_key = Some(key);
+        app.open_application_picker(false);
+        let ctx = egui::Context::default();
+        let frame = |app: &mut EntropyApp| {
+            let mut output = None;
+            for _ in 0..3 {
+                output = Some(ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1200.0, 700.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| app.draw_application_picker_v2(ui.ctx()),
+                ));
+            }
+            let rect = ctx
+                .memory(|memory| memory.area_rect(egui::Id::new("application_picker_v2")))
+                .expect("application picker remains open");
+            let output = output.unwrap();
+            let footer_y = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "Cancel" => {
+                        Some(text.visual_bounding_rect().center().y)
+                    }
+                    _ => None,
+                })
+                .expect("footer remains visible");
+            (rect, footer_y)
+        };
+        let clean = frame(&mut app);
+        app.select_application_picker_choice(detected_application("firefox", "Firefox"));
+        let duplicate = frame(&mut app);
+        app.select_application_picker_choice(detected_application("chrome", "Chrome"));
+        app.application_picker_name = "   ".to_owned();
+        let invalid_name = frame(&mut app);
+        app.select_application_picker_choice(detected_application("firefox", "Firefox"));
+        app.application_picker_name = "   ".to_owned();
+        let both = frame(&mut app);
+        for (label, (rect, footer_y)) in [
+            ("duplicate", duplicate),
+            ("invalid name", invalid_name),
+            ("both", both),
+        ] {
+            assert!(
+                (rect.top() - clean.0.top()).abs() <= 1.0,
+                "{label} moved modal top: {rect:?} vs {:?}",
+                clean.0
+            );
+            assert!(
+                (rect.bottom() - clean.0.bottom()).abs() <= 1.0,
+                "{label} resized modal: {rect:?} vs {:?}",
+                clean.0
+            );
+            assert!(
+                (footer_y - clean.1).abs() <= 1.0,
+                "{label} moved footer: {footer_y} vs {}",
+                clean.1
+            );
+        }
+
+        app.open_application_picker(true);
+        let edit_clean = frame(&mut app);
+        app.application_picker_name = "Default".to_owned();
+        let edit_invalid = frame(&mut app);
+        assert!((edit_clean.0.top() - edit_invalid.0.top()).abs() <= 1.0);
+        assert!((edit_clean.0.bottom() - edit_invalid.0.bottom()).abs() <= 1.0);
+        assert!((edit_clean.1 - edit_invalid.1).abs() <= 1.0);
+    }
+
+    #[test]
     fn add_application_dialog_shows_name_category_and_add_on_small_screen() {
         let mut app = EntropyApp::new_inert_for_test();
         app.app_settings.language = crate::i18n::Language::English;
@@ -2017,6 +2105,9 @@ mod tests {
         assert!(painted("Other").is_some());
         let add = painted("Add").expect("Add must remain visible at 480×480");
         assert!(add.bottom() < 480.0, "Add {add:?}");
+        let baseline_rect = ctx
+            .memory(|memory| memory.area_rect(egui::Id::new("application_picker_v2")))
+            .unwrap();
 
         app.select_application_picker_choice(detected_application("firefox", "Firefox"));
         app.application_picker_name = "Default".to_owned();
@@ -2034,6 +2125,11 @@ mod tests {
             ));
         }
         let invalid = invalid.unwrap();
+        let invalid_rect = ctx
+            .memory(|memory| memory.area_rect(egui::Id::new("application_picker_v2")))
+            .unwrap();
+        assert!((invalid_rect.top() - baseline_rect.top()).abs() <= 1.0);
+        assert!((invalid_rect.bottom() - baseline_rect.bottom()).abs() <= 1.0);
         assert!(invalid.shapes.iter().any(|shape| matches!(&shape.shape,
             egui::Shape::Text(text) if text.galley.text() == "Enter a unique, non-empty layout name"
                 && shape.clip_rect.intersects(text.visual_bounding_rect()))));
