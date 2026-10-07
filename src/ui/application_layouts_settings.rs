@@ -17,11 +17,11 @@ struct ControlPairGeometry {
 const APPLICATION_LAYOUT_CONTROL_GAP: f32 = 8.0;
 fn application_layout_name_is_invalid(
     settings: &crate::application_layouts::DeviceApplicationLayouts,
-    target_id: &str,
+    target_id: Option<&str>,
     value: &str,
 ) -> bool {
     let value = value.trim();
-    value.is_empty() || settings.layout_name_exists(value, Some(target_id))
+    value.is_empty() || settings.layout_name_exists(value, target_id)
 }
 
 fn window_detector_status(
@@ -606,7 +606,7 @@ impl EntropyApp {
         let add_response = crate::ui_style::allocate_ui_at_rect(ui, actions.leading, |ui| {
             crate::ui_style::modern_button(
                 ui,
-                app_layout_text(language, "Добавить…", "Add…"),
+                app_layout_text(language, "Добавить", "Add"),
                 actions.leading.size(),
                 true,
             )
@@ -1032,17 +1032,38 @@ impl EntropyApp {
             if let Some(name) = suggested_name {
                 self.application_picker_name = name;
             }
-            if !self.application_picker_category_changed
-                && self
-                    .application_layout_settings()
-                    .and_then(|settings| settings.layouts.get(target_id))
-                    .is_some_and(|layout| layout.category.is_none())
-            {
-                self.application_picker_category =
-                    super::application_layout_runtime::application_layout_category_for_executable(
-                        &application.executable,
-                    );
+        } else {
+            let name_follows_selection = self.application_picker_name.trim().is_empty()
+                || self
+                    .application_picker_selected
+                    .as_ref()
+                    .is_some_and(|previous| {
+                        self.application_layout_settings().is_some_and(|settings| {
+                            self.application_picker_name
+                                == automatic_application_layout_name(settings, previous, None)
+                        })
+                    });
+            if name_follows_selection {
+                if let Some(settings) = self.application_layout_settings() {
+                    self.application_picker_name =
+                        automatic_application_layout_name(settings, &application, None);
+                }
             }
+        }
+        if !self.application_picker_category_changed
+            && self
+                .application_picker_target_layout_id
+                .as_deref()
+                .is_none_or(|id| {
+                    self.application_layout_settings()
+                        .and_then(|settings| settings.layouts.get(id))
+                        .is_some_and(|layout| layout.category.is_none())
+                })
+        {
+            self.application_picker_category =
+                super::application_layout_runtime::application_layout_category_for_executable(
+                    &application.executable,
+                );
         }
         self.application_picker_selected = Some(application);
     }
@@ -1069,10 +1090,8 @@ impl EntropyApp {
         let language = self.app_settings.language;
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ctx);
         let mut geometry = application_picker_geometry(ctx.content_rect().size(), metrics.scale);
-        if self.application_picker_assign_existing {
-            geometry.list_height =
-                (geometry.list_height - metrics.value(96.0)).max(metrics.value(80.0));
-        }
+        geometry.list_height =
+            (geometry.list_height - metrics.value(96.0)).max(metrics.value(80.0));
         let mut open = self.application_picker_open;
         let mut confirm = false;
         let mut cancel = false;
@@ -1119,7 +1138,7 @@ impl EntropyApp {
                         .size(metrics.value(12.0))
                         .color(app_muted_text(ui.visuals().dark_mode)),
                     );
-                    if self.application_picker_assign_existing {
+                    {
                         use crate::application_layouts::ApplicationLayoutCategory as Category;
                         ui.add_space(metrics.value(8.0));
                         ui.label(RichText::new(app_layout_text(language, "Название раскладки", "Layout name"))
@@ -1291,13 +1310,14 @@ impl EntropyApp {
                         );
                         ui.add_space(metrics.value(6.0));
                     }
-                    let invalid_name = self.application_picker_target_layout_id.as_deref()
-                        .and_then(|id| self.application_layout_settings().map(|settings| (settings, id)))
-                        .is_some_and(|(settings, id)| application_layout_name_is_invalid(
-                            settings,
-                            id,
-                            &self.application_picker_name,
-                        ));
+                    let invalid_name = self.application_picker_selected.is_some()
+                        && self.application_layout_settings().is_some_and(|settings| {
+                            application_layout_name_is_invalid(
+                                settings,
+                                self.application_picker_target_layout_id.as_deref(),
+                                &self.application_picker_name,
+                            )
+                        });
                     if invalid_name {
                         ui.label(RichText::new(app_layout_text(language,
                             "Введите уникальное непустое имя раскладки",
@@ -1329,8 +1349,8 @@ impl EntropyApp {
                         } else {
                             app_layout_text(
                                 language,
-                                "Создать раскладку для выбранного приложения",
-                                "Create a layout for the selected application",
+                                "Создать раскладку с указанным названием и категорией для выбранного приложения",
+                                "Create a layout with the chosen name and category for the selected application",
                             )
                         })
                         .clicked();
@@ -1387,7 +1407,7 @@ impl EntropyApp {
         if let Some(target_id) = self.application_picker_target_layout_id.as_deref() {
             if application_layout_name_is_invalid(
                 settings,
-                target_id,
+                Some(target_id),
                 &self.application_picker_name,
             ) || !settings.layouts.contains_key(target_id)
             {
@@ -1405,8 +1425,17 @@ impl EntropyApp {
                 save_app_settings(&self.app_settings);
             }
         } else {
-            let name = automatic_application_layout_name(settings, &application, None);
-            settings.create_for_application_named(&application, Some(&name), "");
+            if application_layout_name_is_invalid(settings, None, &self.application_picker_name) {
+                return false;
+            }
+            let id = settings.create_for_application_named(
+                &application,
+                Some(&self.application_picker_name),
+                "",
+            );
+            if self.application_picker_category_changed {
+                settings.set_layout_category(&id, self.application_picker_category);
+            }
             save_app_settings(&self.app_settings);
         }
         true
@@ -1778,7 +1807,7 @@ mod tests {
             scrollbar_shapes[0].height() < 324.0,
             "a full-height track must not be painted"
         );
-        let add = position(&before, "Add…");
+        let add = position(&before, "Add");
         let delete = position(&before, "Delete");
         let row = position(&before, "Window detector");
         let mut after = frame(
@@ -1799,7 +1828,7 @@ mod tests {
         assert!(position(&after, "Window detector").y < row.y - 10.0);
         assert!(position(&after, "Application").y < position(&after, "Focused application").y);
         assert!(position(&after, "Focused application").y < position(&after, "Active layout").y);
-        assert!((position(&after, "Add…").y - add.y).abs() < 1.0);
+        assert!((position(&after, "Add").y - add.y).abs() < 1.0);
         assert!((position(&after, "Delete").y - delete.y).abs() < 1.0);
     }
 
@@ -1946,6 +1975,153 @@ mod tests {
     }
 
     #[test]
+    fn add_application_dialog_shows_name_category_and_add_on_small_screen() {
+        let mut app = EntropyApp::new_inert_for_test();
+        app.app_settings.language = crate::i18n::Language::English;
+        let device_key = "offline-macropad-add-dialog-test".to_owned();
+        app.app_settings.application_layouts.insert(
+            device_key.clone(),
+            crate::application_layouts::DeviceApplicationLayouts::default(),
+        );
+        app.app_settings.last_application_layout_device_key = Some(device_key);
+        app.open_application_picker(false);
+
+        let ctx = egui::Context::default();
+        let mut output = None;
+        for _ in 0..3 {
+            output = Some(ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(480.0, 480.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.draw_application_picker_v2(ui.ctx()),
+            ));
+        }
+        let output = output.unwrap();
+        let painted = |label: &str| {
+            output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text)
+                    if text.galley.text() == label
+                        && shape.clip_rect.intersects(text.visual_bounding_rect()) =>
+                {
+                    Some(text.visual_bounding_rect())
+                }
+                _ => None,
+            })
+        };
+        assert!(painted("Layout name").is_some());
+        assert!(painted("Category").is_some());
+        assert!(painted("Other").is_some());
+        let add = painted("Add").expect("Add must remain visible at 480×480");
+        assert!(add.bottom() < 480.0, "Add {add:?}");
+
+        app.select_application_picker_choice(detected_application("firefox", "Firefox"));
+        app.application_picker_name = "Default".to_owned();
+        let mut invalid = None;
+        for _ in 0..3 {
+            invalid = Some(ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(480.0, 480.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.draw_application_picker_v2(ui.ctx()),
+            ));
+        }
+        let invalid = invalid.unwrap();
+        assert!(invalid.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "Enter a unique, non-empty layout name"
+                && shape.clip_rect.intersects(text.visual_bounding_rect()))));
+        assert!(invalid.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "Add"
+                && shape.clip_rect.intersects(text.visual_bounding_rect()))));
+    }
+
+    #[test]
+    fn add_application_suggests_and_saves_name_and_category() {
+        use crate::application_layouts::{
+            ApplicationLayoutCategory as Category, DeviceApplicationLayouts,
+        };
+        let mut app = EntropyApp::new_inert_for_test();
+        let key = "offline-macropad-add-category-test".to_owned();
+        let mut settings = DeviceApplicationLayouts::default();
+        settings.create_for_application_named(
+            &detected_application("settings-tool", "Settings"),
+            Some("Settings"),
+            "",
+        );
+        app.app_settings
+            .application_layouts
+            .insert(key.clone(), settings);
+        app.app_settings.last_application_layout_device_key = Some(key.clone());
+        app.open_application_picker(false);
+        assert!(app.application_picker_name.is_empty());
+        let first = detected_application("first-tool", "Settings");
+        app.select_application_picker_choice(first);
+        assert_eq!(app.application_picker_name, "Settings (2)");
+        app.select_application_picker_choice(detected_application("firefox", "Firefox"));
+        assert_eq!(app.application_picker_name, "Firefox");
+        assert_eq!(app.application_picker_category, Category::Browsers);
+        assert!(!app.application_picker_category_changed);
+        app.application_picker_name = "Research".to_owned();
+        app.select_application_picker_choice(detected_application("chrome", "Chrome"));
+        assert_eq!(
+            app.application_picker_name, "Research",
+            "manual draft survives selection"
+        );
+        app.application_picker_name = " Settings ".to_owned();
+        assert!(!app.apply_picker_selection(app.application_picker_selected.clone().unwrap()));
+        assert_eq!(app.app_settings.application_layouts[&key].layouts.len(), 2);
+        app.application_picker_name = "  ".to_owned();
+        assert!(!app.apply_picker_selection(app.application_picker_selected.clone().unwrap()));
+        app.application_picker_name = "  Research  ".to_owned();
+        app.application_picker_category = Category::Development;
+        app.application_picker_category_changed = true;
+        assert!(app.apply_picker_selection(app.application_picker_selected.clone().unwrap()));
+        let settings = &app.app_settings.application_layouts[&key];
+        let new = settings.editor_layout().unwrap();
+        assert_eq!(new.name, "Research");
+        assert_eq!(new.executable, "chrome");
+        assert_eq!(new.category, Some(Category::Development));
+        let groups =
+            app.application_layout_editor_grouped_options(&app.application_layout_editor_options());
+        assert!(groups
+            .iter()
+            .any(|(category, entries)| *category == Category::Development
+                && entries
+                    .iter()
+                    .any(|(id, name)| id == &new.id && name == "Research")));
+    }
+
+    #[test]
+    fn add_application_auto_category_does_not_persist_override() {
+        use crate::application_layouts::{
+            ApplicationLayoutCategory as Category, DeviceApplicationLayouts,
+        };
+        let mut app = EntropyApp::new_inert_for_test();
+        let key = "offline-macropad-add-auto-category-test".to_owned();
+        app.app_settings
+            .application_layouts
+            .insert(key.clone(), DeviceApplicationLayouts::default());
+        app.app_settings.last_application_layout_device_key = Some(key.clone());
+        app.open_application_picker(false);
+        app.select_application_picker_choice(detected_application("firefox", "Firefox"));
+        assert_eq!(app.application_picker_category, Category::Browsers);
+        assert!(!app.application_picker_category_changed);
+        assert!(app.apply_picker_selection(app.application_picker_selected.clone().unwrap()));
+        let layout = app.app_settings.application_layouts[&key]
+            .editor_layout()
+            .unwrap();
+        assert_eq!(layout.name, "Firefox");
+        assert_eq!(layout.category, None);
+    }
+
+    #[test]
     fn choosing_new_application_suggests_name_and_auto_category() {
         use crate::application_layouts::ApplicationLayoutCategory as Category;
         let mut app = EntropyApp::new_inert_for_test();
@@ -2046,25 +2222,29 @@ mod tests {
         );
 
         assert!(application_layout_name_is_invalid(
-            &settings, &telegram, "  "
+            &settings,
+            Some(&telegram),
+            "  "
         ));
         assert!(application_layout_name_is_invalid(
             &settings,
-            &telegram,
+            Some(&telegram),
             " blender "
         ));
         assert!(!application_layout_name_is_invalid(
-            &settings, &telegram, "Telegram"
+            &settings,
+            Some(&telegram),
+            "Telegram"
         ));
         assert!(!application_layout_name_is_invalid(
             &settings,
-            &telegram,
+            Some(&telegram),
             "Telegram — работа"
         ));
     }
 
     #[test]
-    fn automatic_layout_names_are_unique_without_a_manual_name_field() {
+    fn automatic_layout_names_are_unique_for_new_applications() {
         let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
         let first = crate::application_layouts::DetectedApplication {
             executable: "first-settings".to_owned(),

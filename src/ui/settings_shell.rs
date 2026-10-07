@@ -397,7 +397,7 @@ mod tests {
                     app.draw_layout(ui, &layout, &ctx);
                 },
             );
-            ["Autolayer", "Enable", "Add…"].map(|label| {
+            ["Autolayer", "Enable", "Add"].map(|label| {
                 output
                     .shapes
                     .iter()
@@ -423,7 +423,7 @@ mod tests {
             .unwrap()
             .automatic_switching_enabled = true;
         let restored = frame(&mut app);
-        for (label, (on_y, off_y, restored_y)) in ["Autolayer", "Enable", "Add…"].into_iter().zip(
+        for (label, (on_y, off_y, restored_y)) in ["Autolayer", "Enable", "Add"].into_iter().zip(
             on.into_iter()
                 .zip(off)
                 .zip(restored)
