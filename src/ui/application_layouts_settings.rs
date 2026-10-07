@@ -279,45 +279,34 @@ impl EntropyApp {
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ctx);
         let choices = self.application_layout_category_choices(language);
         let ids = choices.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>();
-        let labels = choices
+        let mut labels = choices
             .iter()
             .map(|(_, label)| label.clone())
             .collect::<Vec<_>>();
+        labels.push(app_layout_text(language, "Новая категория", "New category").to_owned());
         let selected = ids
             .iter()
             .position(|id| Some(id) == self.application_categories_selected_id.as_ref())
-            .unwrap_or(0);
+            .unwrap_or(ids.len());
         let selected_id = ids.get(selected).cloned();
-        let name = self.application_categories_name.trim().to_owned();
-        let name_ok = !name.is_empty() && name.chars().count() <= 48;
-        let create_enabled =
-            name_ok && !labels.iter().any(|label| label.eq_ignore_ascii_case(&name));
-        let rename_enabled = name_ok
-            && !choices.iter().any(|(id, label)| {
-                Some(id) != selected_id.as_ref() && label.eq_ignore_ascii_case(&name)
-            });
         let mut open = true;
         let mut add = false;
-        let mut rename = false;
+        let mut save_name = false;
         let mut delete = false;
-        let mut close = false;
+        let mut selection_changed = false;
         crate::ui_style::centered_modal_window(
             ctx,
-            app_layout_text(language, "Категории Автослоя", "Autolayer categories"),
+            app_layout_text(language, "Категории", "Categories"),
             egui::Id::new("autolayer_categories_modal"),
             &mut open,
-            metrics.size(450.0, 240.0),
+            metrics.size(380.0, 208.0),
         )
         .movable(false)
         .show(ctx, |ui| {
-            let width = metrics.value(390.0).min(ui.available_width());
+            let width = metrics.value(340.0).min(ui.available_width());
             ui.set_width(width);
-            ui.label(app_layout_text(
-                language,
-                "Выберите категорию или введите новую",
-                "Select a category or enter a new one",
-            ));
-            ui.add_space(metrics.value(8.0));
+            ui.label(app_layout_text(language, "Категория", "Category"));
+            ui.add_space(metrics.value(6.0));
             if let (_, Some(picked)) = crate::ui_style::modern_dropdown_select_sized(
                 ui,
                 ui.make_persistent_id("autolayer_manage_category"),
@@ -327,11 +316,17 @@ impl EntropyApp {
                 metrics.settings_control_height(),
                 metrics.settings_control_font_size(),
             ) {
-                self.application_categories_selected_id = Some(ids[picked].clone());
-                self.application_categories_name = labels[picked].clone();
+                selection_changed = true;
+                self.application_categories_selected_id = ids.get(picked).cloned();
+                self.application_categories_name = ids
+                    .get(picked)
+                    .map(|_| labels[picked].clone())
+                    .unwrap_or_default();
             }
-            ui.add_space(metrics.value(10.0));
-            crate::ui_style::modern_text_field_sized(
+            ui.add_space(metrics.value(8.0));
+            ui.label(app_layout_text(language, "Название", "Name"));
+            ui.add_space(metrics.value(6.0));
+            let name_response = crate::ui_style::modern_text_field_sized(
                 ui,
                 ui.make_persistent_id("autolayer_manage_category_name"),
                 &mut self.application_categories_name,
@@ -340,45 +335,51 @@ impl EntropyApp {
                 app_layout_text(language, "Название категории", "Category name"),
                 48,
                 egui::Align::Min,
-            );
+            )
+            .on_hover_text(app_layout_text(
+                language,
+                "Нажмите Enter или выйдите из поля, чтобы сохранить название",
+                "Press Enter or leave the field to save the name",
+            ));
+            let name = self.application_categories_name.trim();
+            let unique_name = !name.is_empty()
+                && name.chars().count() <= 48
+                && !choices.iter().any(|(id, label)| {
+                    Some(id) != self.application_categories_selected_id.as_ref()
+                        && label.eq_ignore_ascii_case(name)
+                });
+            save_name = self.application_categories_selected_id.is_some()
+                && !selection_changed
+                && unique_name
+                && (name_response.lost_focus()
+                    || (name_response.has_focus()
+                        && ui.input(|input| input.key_pressed(egui::Key::Enter))));
             ui.add_space(metrics.value(12.0));
             ui.horizontal(|ui| {
                 let button_size = metrics.size(112.0, 32.0);
-                add = crate::ui_style::modern_button(
-                    ui,
-                    app_layout_text(language, "Создать", "Create"),
-                    button_size,
-                    create_enabled,
-                )
-                .clicked();
-                rename = crate::ui_style::modern_button(
-                    ui,
-                    app_layout_text(language, "Переименовать", "Rename"),
-                    button_size,
-                    rename_enabled,
-                )
-                .clicked();
-                delete = crate::ui_style::modern_button(
-                    ui,
-                    app_layout_text(language, "Удалить", "Delete"),
-                    button_size,
-                    selected_id.as_deref() != Some("other"),
-                )
-                .on_hover_text(app_layout_text(
-                    language,
-                    "Приложения из удалённой категории перейдут в «Другие»",
-                    "Applications in a deleted category move to Other",
-                ))
-                .clicked();
+                if self.application_categories_selected_id.is_some() {
+                    delete = crate::ui_style::modern_button(
+                        ui,
+                        app_layout_text(language, "Удалить", "Delete"),
+                        button_size,
+                        self.application_categories_selected_id.as_deref() != Some("other"),
+                    )
+                    .on_hover_text(app_layout_text(
+                        language,
+                        "Приложения из удалённой категории перейдут в «Другие»",
+                        "Applications in a deleted category move to Other",
+                    ))
+                    .clicked();
+                } else {
+                    add = crate::ui_style::modern_button(
+                        ui,
+                        app_layout_text(language, "Создать", "Create"),
+                        button_size,
+                        unique_name,
+                    )
+                    .clicked();
+                }
             });
-            ui.add_space(metrics.value(12.0));
-            close = crate::ui_style::modern_button(
-                ui,
-                app_layout_text(language, "Закрыть", "Close"),
-                metrics.size(104.0, 32.0),
-                true,
-            )
-            .clicked();
         });
         let name = self.application_categories_name.trim().to_owned();
         if let Some(settings) = self.application_layout_settings_mut() {
@@ -388,7 +389,8 @@ impl EntropyApp {
                 None
             };
             let changed = new_id.is_some()
-                || (rename
+                || (save_name
+                    && !delete
                     && selected_id
                         .as_deref()
                         .is_some_and(|id| settings.rename_category(id, &name)))
@@ -412,7 +414,6 @@ impl EntropyApp {
             }
         }
         if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
-            || close
             || !open
         {
             self.application_categories_open = false;
@@ -2393,13 +2394,7 @@ mod tests {
             ));
         }
         let output = output.unwrap();
-        for label in [
-            "Autolayer categories",
-            "Create",
-            "Rename",
-            "Delete",
-            "Close",
-        ] {
+        for label in ["Categories", "Category", "Delete"] {
             assert!(
                 output.shapes.iter().any(|shape| matches!(&shape.shape,
                 egui::Shape::Text(text) if text.galley.text() == label
@@ -2407,6 +2402,35 @@ mod tests {
                 "missing {label}"
             );
         }
+        for redundant in ["Rename", "Close", "Create"] {
+            assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text() == redundant)));
+        }
+        let window = ctx
+            .memory(|memory| memory.area_rect(egui::Id::new("autolayer_categories_modal")))
+            .expect("category manager window");
+        assert!(
+            window.left() >= 0.0 && window.right() <= 480.0,
+            "{window:?}"
+        );
+        assert!(
+            window.top() >= 0.0 && window.bottom() <= 480.0,
+            "{window:?}"
+        );
+        assert!(
+            window.width() <= 400.0 && window.height() <= 240.0,
+            "{window:?}"
+        );
+        app.application_categories_selected_id = None;
+        app.application_categories_name = "Projects".to_owned();
+        let create_output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.draw_application_categories_modal(ui.ctx());
+        });
+        assert!(create_output
+            .shapes
+            .iter()
+            .any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "Create")));
         let _ = ctx.run_ui(
             egui::RawInput {
                 events: vec![egui::Event::Key {
