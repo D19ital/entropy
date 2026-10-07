@@ -1049,7 +1049,9 @@ pub fn modern_dropdown_grouped_options(
                     .id(id.with(("category_submenu", index)))
                     .open(true)
                     .align(egui::RectAlign::RIGHT_START)
-                    .gap(4.0)
+                    // Layer operations offsets its submenu 8px past the parent
+                    // frame inset, then leaves a 4px gap from the frame edge.
+                    .gap(12.0)
                     .width(child_width)
                     .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
                     .show(|ui| {

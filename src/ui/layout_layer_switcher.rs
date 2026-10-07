@@ -917,6 +917,18 @@ mod tests {
             egui::Shape::Text(text) if text.galley.text() == "Firefox"
                 && shape.clip_rect.intersects(text.visual_bounding_rect())
         )));
+        let (category_row, child_menu) = ctx.data(|data| {
+            (
+                data.get_temp::<egui::Rect>(popup_id.with("category_row_rect"))
+                    .expect("hovered category row"),
+                data.get_temp::<egui::Rect>(popup_id.with("category_submenu_rect"))
+                    .expect("open category submenu"),
+            )
+        });
+        assert!(
+            (child_menu.left() - category_row.right() - 12.0).abs() <= 1.0,
+            "category-to-submenu gap should match Layer operations: {category_row:?} → {child_menu:?}"
+        );
         frame(&mut app, vec![egui::Event::PointerMoved(category_pos)]);
         let (_, submenu) = frame(&mut app, vec![]);
         let visible_names = submenu
