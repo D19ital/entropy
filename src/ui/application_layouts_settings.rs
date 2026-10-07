@@ -225,33 +225,6 @@ impl EntropyApp {
             }
 
             self.ensure_application_layout_settings();
-            let manage_rect = egui::Rect::from_min_size(
-                egui::pos2(
-                    body_rect.right() - metrics.value(104.0),
-                    title_y - metrics.value(14.0),
-                ),
-                metrics.size(104.0, 28.0),
-            );
-            if crate::ui_style::allocate_ui_at_rect(ui, manage_rect, |ui| {
-                crate::ui_style::modern_button(
-                    ui,
-                    app_layout_text(language, "Категории", "Categories"),
-                    manage_rect.size(),
-                    true,
-                )
-            })
-            .inner
-            .clicked()
-            {
-                self.application_categories_open = true;
-                self.application_categories_selected_id = Some("other".to_owned());
-                self.application_categories_name = self
-                    .application_layout_category_choices(language)
-                    .into_iter()
-                    .find(|(id, _)| id == "other")
-                    .map(|(_, label)| label)
-                    .unwrap_or_default();
-            }
             let action_size = metrics.size(126.0, 34.0);
             let action_gap = metrics.value(10.0);
             let row_count = self.application_layouts_editor_row_count();
@@ -493,7 +466,7 @@ impl EntropyApp {
 
     fn application_layouts_editor_row_count(&self) -> usize {
         let show_gnome = self.application_layouts_show_gnome_integration();
-        7 + usize::from(show_gnome)
+        8 + usize::from(show_gnome)
             + usize::from(show_gnome && self.application_layouts_install_feedback_visible())
     }
 
@@ -739,6 +712,42 @@ impl EntropyApp {
             }
         }
 
+        if visible_rows.contains(&(next_row + 2)) {
+            let tooltip = app_layout_text(
+                language,
+                "Создать, переименовать или удалить категории приложений",
+                "Create, rename, or delete application categories",
+            );
+            crate::ui_style::settings_list_row_with_tooltip(
+                ui,
+                row_width,
+                row_height,
+                app_layout_text(language, "Категории", "Categories"),
+                true,
+                Some(tooltip),
+                metrics.value(82.0),
+                |ui| {
+                    if crate::ui_style::modern_button(
+                        ui,
+                        app_layout_text(language, "Изменить", "Edit"),
+                        egui::vec2(metrics.value(82.0), control_height),
+                        true,
+                    )
+                    .clicked()
+                    {
+                        self.application_categories_open = true;
+                        self.application_categories_selected_id = Some("other".to_owned());
+                        self.application_categories_name = self
+                            .application_layout_category_choices(language)
+                            .into_iter()
+                            .find(|(id, _)| id == "other")
+                            .map(|(_, label)| label)
+                            .unwrap_or_default();
+                    }
+                },
+            );
+        }
+
         self.draw_application_layouts_runtime_status(
             ui,
             &device_key,
@@ -747,7 +756,7 @@ impl EntropyApp {
             row_height,
             control_width,
             control_font,
-            next_row + 2,
+            next_row + 3,
             &visible_rows,
         );
 
@@ -2311,6 +2320,49 @@ mod tests {
                 .values()
                 .any(|layout| layout.name == "Unsaved name"));
         }
+    }
+
+    #[test]
+    fn category_manager_row_follows_application_and_precedes_runtime_status() {
+        let mut app = EntropyApp::new_inert_for_test();
+        app.app_settings.language = crate::i18n::Language::English;
+        let key = "offline-macropad-category-row-test".to_owned();
+        app.app_settings.application_layouts.insert(
+            key.clone(),
+            crate::application_layouts::DeviceApplicationLayouts::default(),
+        );
+        app.app_settings.last_application_layout_device_key = Some(key);
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 1000.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                app.draw_application_layouts_editor(
+                    ui,
+                    crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx()),
+                    0..app.application_layouts_editor_row_count(),
+                );
+            },
+        );
+        let label_y = |label| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.visual_bounding_rect().center().y)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing row: {label}"))
+        };
+        assert!(label_y("Application") < label_y("Categories"));
+        assert!(label_y("Categories") < label_y("Focused application"));
     }
 
     #[test]
