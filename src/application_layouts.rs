@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) const APPLICATION_LAYOUT_CONTROL_COUNT: usize = 15;
 pub(crate) const APPLICATION_LAYOUT_KEY_COUNT: usize = 13;
@@ -25,6 +25,18 @@ pub(crate) enum ApplicationLayoutCategory {
 }
 
 impl ApplicationLayoutCategory {
+    pub(crate) fn id(self) -> &'static str {
+        match self {
+            Self::Browsers => "browsers",
+            Self::Development => "development",
+            Self::Graphics => "graphics",
+            Self::Video => "video",
+            Self::Audio => "audio",
+            Self::Communication => "communication",
+            Self::Other => "other",
+        }
+    }
+
     pub(crate) const ALL: [Self; 7] = [
         Self::Browsers,
         Self::Development,
@@ -51,6 +63,29 @@ impl ApplicationLayoutCategory {
             _ => Self::Other,
         }
     }
+}
+
+pub(crate) fn application_layout_category_for_executable(
+    executable: &str,
+) -> ApplicationLayoutCategory {
+    static PRESET_CATEGORIES: std::sync::OnceLock<Vec<(&'static str, ApplicationLayoutCategory)>> =
+        std::sync::OnceLock::new();
+    PRESET_CATEGORIES
+        .get_or_init(|| {
+            builtin_application_layout_presets()
+                .iter()
+                .map(|preset| {
+                    (
+                        preset.executable,
+                        ApplicationLayoutCategory::for_preset_id(preset.id),
+                    )
+                })
+                .collect()
+        })
+        .iter()
+        .find(|(known, _)| executables_match(executable, known))
+        .map(|(_, category)| *category)
+        .unwrap_or(ApplicationLayoutCategory::Other)
 }
 
 const MOD_CTRL: u16 = 0x0100;
@@ -142,6 +177,8 @@ pub(crate) struct ApplicationLayout {
     /// Explicit UI category; absent for legacy layouts and auto-categorized presets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) category: Option<ApplicationLayoutCategory>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) custom_category_id: Option<String>,
     #[serde(default = "default_true")]
     pub(crate) automatic_switching: bool,
     /// Compatibility seed for application-layouts v1. New builds persist
@@ -169,6 +206,7 @@ impl ApplicationLayout {
             application_identities: Vec::new(),
             title_contains: String::new(),
             category: None,
+            custom_category_id: None,
             automatic_switching: false,
             legacy_keycodes: default_keycodes(),
             layers: default_layer_keycodes(),
@@ -426,6 +464,14 @@ pub(crate) struct DeviceApplicationLayouts {
     /// Auto-created but not yet linked: detector unavailable or app not installed.
     #[serde(default)]
     pub(crate) pending_builtin_auto_bind: BTreeMap<String, String>,
+    /// Stable category IDs and user-visible names, per device. Built-in names
+    /// here override translations; custom IDs are allocated by create_category.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) category_names: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) removed_categories: BTreeSet<String>,
+    #[serde(default = "default_next_id")]
+    next_category_id: u32,
     #[serde(default = "default_next_id")]
     next_id: u32,
 }
@@ -442,12 +488,117 @@ impl Default for DeviceApplicationLayouts {
             builtin_presets_provisioned: false,
             builtin_presets_catalog_revision: 0,
             pending_builtin_auto_bind: BTreeMap::new(),
+            category_names: BTreeMap::new(),
+            removed_categories: BTreeSet::new(),
+            next_category_id: default_next_id(),
             next_id: default_next_id(),
         }
     }
 }
 
 impl DeviceApplicationLayouts {
+    pub(crate) fn category_exists(&self, id: &str) -> bool {
+        !self.removed_categories.contains(id)
+            && (ApplicationLayoutCategory::ALL
+                .iter()
+                .any(|category| category.id() == id)
+                || self.category_names.contains_key(id))
+    }
+
+    pub(crate) fn category_id_for_layout(&self, layout: &ApplicationLayout) -> String {
+        let id = layout.custom_category_id.as_deref().unwrap_or_else(|| {
+            layout
+                .category
+                .unwrap_or_else(|| application_layout_category_for_executable(&layout.executable))
+                .id()
+        });
+        if self.category_exists(id) {
+            id.to_owned()
+        } else {
+            "other".to_owned()
+        }
+    }
+
+    pub(crate) fn create_category(&mut self, name: &str) -> Option<String> {
+        let name = name.trim();
+        if name.is_empty()
+            || name.chars().count() > 48
+            || self
+                .category_names
+                .values()
+                .any(|other| other.eq_ignore_ascii_case(name))
+        {
+            return None;
+        }
+        let id = loop {
+            let id = format!("custom:{}", self.next_category_id);
+            self.next_category_id = self.next_category_id.checked_add(1)?;
+            if !self.category_names.contains_key(&id) && !self.removed_categories.contains(&id) {
+                break id;
+            }
+        };
+        self.category_names.insert(id.clone(), name.to_owned());
+        Some(id)
+    }
+
+    pub(crate) fn rename_category(&mut self, id: &str, name: &str) -> bool {
+        let name = name.trim();
+        if !self.category_exists(id)
+            || name.is_empty()
+            || name.chars().count() > 48
+            || self
+                .category_names
+                .iter()
+                .any(|(other_id, other)| other_id != id && other.eq_ignore_ascii_case(name))
+        {
+            return false;
+        }
+        if self.category_names.get(id).is_some_and(|old| old == name) {
+            return false;
+        }
+        self.category_names.insert(id.to_owned(), name.to_owned());
+        true
+    }
+
+    pub(crate) fn remove_category(&mut self, id: &str) -> bool {
+        if id == "other" || !self.category_exists(id) {
+            return false;
+        }
+        let affected = self
+            .layouts
+            .iter()
+            .filter(|(key, _)| key.as_str() != DEFAULT_APPLICATION_LAYOUT_ID)
+            .filter(|(_, layout)| self.category_id_for_layout(layout) == id)
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        for key in affected {
+            self.set_layout_category_id(&key, "other");
+        }
+        self.category_names.remove(id);
+        if ApplicationLayoutCategory::ALL
+            .iter()
+            .any(|category| category.id() == id)
+        {
+            self.removed_categories.insert(id.to_owned());
+        }
+        true
+    }
+
+    pub(crate) fn set_layout_category_id(&mut self, layout_id: &str, category_id: &str) -> bool {
+        if layout_id == DEFAULT_APPLICATION_LAYOUT_ID || !self.category_exists(category_id) {
+            return false;
+        }
+        let Some(layout) = self.layouts.get_mut(layout_id) else {
+            return false;
+        };
+        if layout.custom_category_id.as_deref() == Some(category_id) {
+            return false;
+        }
+        layout.custom_category_id = Some(category_id.to_owned());
+        layout.bump_revision();
+        true
+    }
+
     pub(crate) fn normalize(&mut self) -> bool {
         let mut changed = false;
         if let Some(automatic_switching) = self.legacy_automatic_switching.take() {
@@ -467,6 +618,10 @@ impl DeviceApplicationLayouts {
         }
         if let Some(default) = self.layouts.get_mut(DEFAULT_APPLICATION_LAYOUT_ID) {
             if default.category.take().is_some() {
+                default.bump_revision();
+                changed = true;
+            }
+            if default.custom_category_id.take().is_some() {
                 default.bump_revision();
                 changed = true;
             }
@@ -587,6 +742,7 @@ impl DeviceApplicationLayouts {
                 ),
                 title_contains: title_contains.trim().to_owned(),
                 category: None,
+                custom_category_id: None,
                 automatic_switching: true,
                 legacy_keycodes: default_keycodes(),
                 layers: seed_layers,
@@ -845,16 +1001,17 @@ impl DeviceApplicationLayouts {
         id: &str,
         category: ApplicationLayoutCategory,
     ) -> bool {
-        if id == DEFAULT_APPLICATION_LAYOUT_ID {
+        if id == DEFAULT_APPLICATION_LAYOUT_ID || !self.category_exists(category.id()) {
             return false;
         }
         let Some(layout) = self.layouts.get_mut(id) else {
             return false;
         };
-        if layout.category == Some(category) {
+        if layout.category == Some(category) && layout.custom_category_id.is_none() {
             return false;
         }
         layout.category = Some(category);
+        layout.custom_category_id = None;
         layout.bump_revision();
         true
     }
@@ -4128,5 +4285,49 @@ mod tests {
             Some(ApplicationLayoutCategory::Audio)
         );
         assert_eq!(round_trip.layouts[&id].revision, revision + 1);
+    }
+
+    #[test]
+    fn editable_categories_keep_stable_ids_and_reassign_on_delete() {
+        let mut settings = DeviceApplicationLayouts::default();
+        let firefox = settings.create_for_application(&app("firefox", "Firefox"));
+        let editor = settings.create_for_application(&app("code", "Code"));
+        assert_eq!(
+            settings.category_id_for_layout(&settings.layouts[&firefox]),
+            "browsers"
+        );
+        assert!(!settings.remove_category("other"));
+        let id = settings.create_category("Work").expect("new category");
+        assert!(!settings.create_category("  work ").is_some());
+        assert!(settings.set_layout_category_id(&firefox, &id));
+        assert!(settings.rename_category(&id, "Projects"));
+        let json = serde_json::to_string(&settings).unwrap();
+        let mut restored: DeviceApplicationLayouts = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.category_names[&id], "Projects");
+        assert_eq!(
+            restored.category_id_for_layout(&restored.layouts[&firefox]),
+            id
+        );
+        assert!(restored.remove_category(&id));
+        assert_eq!(
+            restored.category_id_for_layout(&restored.layouts[&firefox]),
+            "other"
+        );
+        assert!(!restored.category_exists(&id));
+        let next = restored.create_category("New").unwrap();
+        assert_ne!(next, id);
+        assert!(restored.remove_category("development"));
+        assert_eq!(
+            restored.category_id_for_layout(&restored.layouts[&editor]),
+            "other"
+        );
+        assert!(restored.removed_categories.contains("development"));
+        let json = serde_json::to_string(&restored).unwrap();
+        let round_trip: DeviceApplicationLayouts = serde_json::from_str(&json).unwrap();
+        assert!(!round_trip.category_exists("development"));
+        assert_eq!(
+            round_trip.category_id_for_layout(&round_trip.layouts[&editor]),
+            "other"
+        );
     }
 }

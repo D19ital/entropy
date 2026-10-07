@@ -20,14 +20,7 @@ pub(crate) fn application_layout_category_label(
 pub(crate) fn application_layout_category_for_executable(
     executable: &str,
 ) -> crate::application_layouts::ApplicationLayoutCategory {
-    use crate::application_layouts::{
-        builtin_application_layout_presets, executables_match, ApplicationLayoutCategory,
-    };
-    builtin_application_layout_presets()
-        .iter()
-        .find(|preset| executables_match(executable, preset.executable))
-        .map(|preset| ApplicationLayoutCategory::for_preset_id(preset.id))
-        .unwrap_or(ApplicationLayoutCategory::Other)
+    crate::application_layouts::application_layout_category_for_executable(executable)
 }
 
 pub(super) fn device_supports_application_layouts(device: &crate::device::Device) -> bool {
@@ -116,7 +109,7 @@ impl EntropyApp {
         self.app_settings.application_layouts.get(&key)
     }
 
-    fn application_layout_settings_mut(
+    pub(super) fn application_layout_settings_mut(
         &mut self,
     ) -> Option<&mut crate::application_layouts::DeviceApplicationLayouts> {
         let key = self.application_layout_device_key()?;
@@ -153,33 +146,28 @@ impl EntropyApp {
     pub(super) fn application_layout_editor_grouped_options(
         &self,
         options: &[(String, String)],
-    ) -> Vec<(
-        crate::application_layouts::ApplicationLayoutCategory,
-        Vec<(String, String)>,
-    )> {
-        use crate::application_layouts::{
-            ApplicationLayoutCategory, DEFAULT_APPLICATION_LAYOUT_ID,
+    ) -> Vec<(String, Vec<(String, String)>)> {
+        let Some(settings) = self.application_layout_settings() else {
+            return Vec::new();
         };
-        let settings = self.application_layout_settings();
-        let mut groups = std::collections::BTreeMap::<_, Vec<_>>::new();
-        for (id, name) in options {
-            if id == DEFAULT_APPLICATION_LAYOUT_ID {
-                continue;
-            }
-            let category = settings
-                .and_then(|settings| settings.layouts.get(id))
-                .map(|layout| {
-                    layout.category.unwrap_or_else(|| {
-                        application_layout_category_for_executable(&layout.executable)
+        self.application_layout_category_choices(self.app_settings.language)
+            .into_iter()
+            .filter_map(|(category_id, _)| {
+                let entries = options
+                    .iter()
+                    .filter(|(id, _)| {
+                        id != crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID
                     })
-                })
-                .unwrap_or(ApplicationLayoutCategory::Other);
-            groups
-                .entry(category)
-                .or_default()
-                .push((id.clone(), name.clone()));
-        }
-        groups.into_iter().collect()
+                    .filter(|(id, _)| {
+                        settings.layouts.get(id).is_some_and(|layout| {
+                            settings.category_id_for_layout(layout) == category_id
+                        })
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                (!entries.is_empty()).then_some((category_id, entries))
+            })
+            .collect()
     }
 
     pub(super) fn application_layout_editor_labeled_groups(
@@ -187,14 +175,46 @@ impl EntropyApp {
         options: &[(String, String)],
         language: crate::i18n::Language,
     ) -> Vec<(String, Vec<(String, String)>)> {
+        let labels = self
+            .application_layout_category_choices(language)
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>();
         self.application_layout_editor_grouped_options(options)
             .into_iter()
-            .map(|(category, entries)| {
+            .filter_map(|(id, entries)| labels.get(&id).map(|label| (label.clone(), entries)))
+            .collect()
+    }
+
+    pub(super) fn application_layout_category_choices(
+        &self,
+        language: crate::i18n::Language,
+    ) -> Vec<(String, String)> {
+        use crate::application_layouts::ApplicationLayoutCategory as Category;
+        let Some(settings) = self.application_layout_settings() else {
+            return Vec::new();
+        };
+        Category::ALL
+            .iter()
+            .filter(|category| settings.category_exists(category.id()))
+            .map(|category| {
                 (
-                    application_layout_category_label(category, language).to_owned(),
-                    entries,
+                    category.id().to_owned(),
+                    settings
+                        .category_names
+                        .get(category.id())
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            application_layout_category_label(*category, language).to_owned()
+                        }),
                 )
             })
+            .chain(
+                settings
+                    .category_names
+                    .iter()
+                    .filter(|(id, _)| id.starts_with("custom:"))
+                    .map(|(id, name)| (id.clone(), name.clone())),
+            )
             .collect()
     }
 
@@ -838,15 +858,15 @@ mod tests {
         let groups = app.application_layout_editor_grouped_options(&options);
         assert!(groups
             .iter()
-            .any(|(category, entries)| *category == Category::Browsers
+            .any(|(category, entries)| category == Category::Browsers.id()
                 && entries.iter().any(|(id, _)| id == &firefox)));
         assert!(groups
             .iter()
-            .any(|(category, entries)| *category == Category::Development
+            .any(|(category, entries)| category == Category::Development.id()
                 && entries.iter().any(|(id, _)| id == &code)));
         assert!(groups
             .iter()
-            .any(|(category, entries)| *category == Category::Other
+            .any(|(category, entries)| category == Category::Other.id()
                 && entries.iter().any(|(id, _)| id == &custom)));
         assert!(groups
             .iter()
@@ -872,15 +892,15 @@ mod tests {
         let groups = app.application_layout_editor_grouped_options(&options);
         assert!(groups
             .iter()
-            .any(|(category, entries)| *category == Category::Audio
+            .any(|(category, entries)| category == Category::Audio.id()
                 && entries.iter().any(|(id, _)| id == &firefox)));
         assert!(groups
             .iter()
-            .any(|(category, entries)| *category == Category::Browsers
+            .any(|(category, entries)| category == Category::Browsers.id()
                 && entries.iter().any(|(id, _)| id == &custom)));
         assert!(groups
             .iter()
-            .any(|(category, entries)| *category == Category::Development
+            .any(|(category, entries)| category == Category::Development.id()
                 && entries.iter().any(|(id, _)| id == &code)));
         assert_eq!(Category::ALL.len(), 7);
         assert_eq!(
@@ -896,6 +916,49 @@ mod tests {
         assert!(labeled.iter().any(
             |(label, entries)| label == "Audio" && entries.iter().any(|(id, _)| id == &firefox)
         ));
+    }
+
+    #[test]
+    fn editable_categories_reach_both_grouped_selectors_after_reload() {
+        use crate::application_layouts::{DetectedApplication, DeviceApplicationLayouts};
+        let mut app = EntropyApp::new_inert_for_test();
+        let key = "offline-macropad-category-crud".to_owned();
+        let mut settings = DeviceApplicationLayouts::default();
+        let firefox = settings.create_for_application(&DetectedApplication {
+            executable: "firefox".to_owned(),
+            display_name: "Firefox".to_owned(),
+            ..Default::default()
+        });
+        let code = settings.create_for_application(&DetectedApplication {
+            executable: "code".to_owned(),
+            display_name: "VS Code".to_owned(),
+            ..Default::default()
+        });
+        let custom_id = settings.create_category("Work").unwrap();
+        assert!(settings.set_layout_category_id(&firefox, &custom_id));
+        assert!(settings.rename_category(&custom_id, "Projects"));
+        assert!(settings.remove_category("development"));
+        let encoded = serde_json::to_string(&settings).unwrap();
+        app.app_settings
+            .application_layouts
+            .insert(key.clone(), serde_json::from_str(&encoded).unwrap());
+        app.app_settings.last_application_layout_device_key = Some(key);
+        let choices = app.application_layout_category_choices(crate::i18n::Language::English);
+        assert!(choices
+            .iter()
+            .any(|(id, label)| id == &custom_id && label == "Projects"));
+        assert!(!choices.iter().any(|(id, _)| id == "development"));
+        let groups = app.application_layout_editor_labeled_groups(
+            &app.application_layout_editor_options(),
+            crate::i18n::Language::English,
+        );
+        assert!(groups
+            .iter()
+            .any(|(label, entries)| label == "Projects"
+                && entries.iter().any(|(id, _)| id == &firefox)));
+        assert!(groups
+            .iter()
+            .any(|(label, entries)| label == "Other" && entries.iter().any(|(id, _)| id == &code)));
     }
 
     #[test]

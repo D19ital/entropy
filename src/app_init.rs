@@ -140,6 +140,10 @@ impl EntropyApp {
             application_picker_category:
                 crate::application_layouts::ApplicationLayoutCategory::Other,
             application_picker_category_changed: false,
+            application_picker_custom_category_id: None,
+            application_categories_open: false,
+            application_categories_selected_id: None,
+            application_categories_name: String::new(),
             pending_device_connect: None,
             #[cfg(not(target_arch = "wasm32"))]
             headless: false,

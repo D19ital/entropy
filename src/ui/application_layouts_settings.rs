@@ -225,6 +225,33 @@ impl EntropyApp {
             }
 
             self.ensure_application_layout_settings();
+            let manage_rect = egui::Rect::from_min_size(
+                egui::pos2(
+                    body_rect.right() - metrics.value(104.0),
+                    title_y - metrics.value(14.0),
+                ),
+                metrics.size(104.0, 28.0),
+            );
+            if crate::ui_style::allocate_ui_at_rect(ui, manage_rect, |ui| {
+                crate::ui_style::modern_button(
+                    ui,
+                    app_layout_text(language, "Категории", "Categories"),
+                    manage_rect.size(),
+                    true,
+                )
+            })
+            .inner
+            .clicked()
+            {
+                self.application_categories_open = true;
+                self.application_categories_selected_id = Some("other".to_owned());
+                self.application_categories_name = self
+                    .application_layout_category_choices(language)
+                    .into_iter()
+                    .find(|(id, _)| id == "other")
+                    .map(|(_, label)| label)
+                    .unwrap_or_default();
+            }
             let action_size = metrics.size(126.0, 34.0);
             let action_gap = metrics.value(10.0);
             let row_count = self.application_layouts_editor_row_count();
@@ -268,6 +295,155 @@ impl EntropyApp {
             });
         });
         self.draw_application_picker_v2(ui.ctx());
+        self.draw_application_categories_modal(ui.ctx());
+    }
+
+    fn draw_application_categories_modal(&mut self, ctx: &egui::Context) {
+        if !self.application_categories_open {
+            return;
+        }
+        let language = self.app_settings.language;
+        let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ctx);
+        let choices = self.application_layout_category_choices(language);
+        let ids = choices.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>();
+        let labels = choices
+            .iter()
+            .map(|(_, label)| label.clone())
+            .collect::<Vec<_>>();
+        let selected = ids
+            .iter()
+            .position(|id| Some(id) == self.application_categories_selected_id.as_ref())
+            .unwrap_or(0);
+        let selected_id = ids.get(selected).cloned();
+        let name = self.application_categories_name.trim().to_owned();
+        let name_ok = !name.is_empty() && name.chars().count() <= 48;
+        let create_enabled =
+            name_ok && !labels.iter().any(|label| label.eq_ignore_ascii_case(&name));
+        let rename_enabled = name_ok
+            && !choices.iter().any(|(id, label)| {
+                Some(id) != selected_id.as_ref() && label.eq_ignore_ascii_case(&name)
+            });
+        let mut open = true;
+        let mut add = false;
+        let mut rename = false;
+        let mut delete = false;
+        let mut close = false;
+        crate::ui_style::centered_modal_window(
+            ctx,
+            app_layout_text(language, "Категории Автослоя", "Autolayer categories"),
+            egui::Id::new("autolayer_categories_modal"),
+            &mut open,
+            metrics.size(450.0, 240.0),
+        )
+        .movable(false)
+        .show(ctx, |ui| {
+            let width = metrics.value(390.0).min(ui.available_width());
+            ui.set_width(width);
+            ui.label(app_layout_text(
+                language,
+                "Выберите категорию или введите новую",
+                "Select a category or enter a new one",
+            ));
+            ui.add_space(metrics.value(8.0));
+            if let (_, Some(picked)) = crate::ui_style::modern_dropdown_select_sized(
+                ui,
+                ui.make_persistent_id("autolayer_manage_category"),
+                &labels,
+                selected,
+                width,
+                metrics.settings_control_height(),
+                metrics.settings_control_font_size(),
+            ) {
+                self.application_categories_selected_id = Some(ids[picked].clone());
+                self.application_categories_name = labels[picked].clone();
+            }
+            ui.add_space(metrics.value(10.0));
+            crate::ui_style::modern_text_field_sized(
+                ui,
+                ui.make_persistent_id("autolayer_manage_category_name"),
+                &mut self.application_categories_name,
+                width,
+                metrics.settings_control_height(),
+                app_layout_text(language, "Название категории", "Category name"),
+                48,
+                egui::Align::Min,
+            );
+            ui.add_space(metrics.value(12.0));
+            ui.horizontal(|ui| {
+                let button_size = metrics.size(112.0, 32.0);
+                add = crate::ui_style::modern_button(
+                    ui,
+                    app_layout_text(language, "Создать", "Create"),
+                    button_size,
+                    create_enabled,
+                )
+                .clicked();
+                rename = crate::ui_style::modern_button(
+                    ui,
+                    app_layout_text(language, "Переименовать", "Rename"),
+                    button_size,
+                    rename_enabled,
+                )
+                .clicked();
+                delete = crate::ui_style::modern_button(
+                    ui,
+                    app_layout_text(language, "Удалить", "Delete"),
+                    button_size,
+                    selected_id.as_deref() != Some("other"),
+                )
+                .on_hover_text(app_layout_text(
+                    language,
+                    "Приложения из удалённой категории перейдут в «Другие»",
+                    "Applications in a deleted category move to Other",
+                ))
+                .clicked();
+            });
+            ui.add_space(metrics.value(12.0));
+            close = crate::ui_style::modern_button(
+                ui,
+                app_layout_text(language, "Закрыть", "Close"),
+                metrics.size(104.0, 32.0),
+                true,
+            )
+            .clicked();
+        });
+        let name = self.application_categories_name.trim().to_owned();
+        if let Some(settings) = self.application_layout_settings_mut() {
+            let new_id = if add {
+                settings.create_category(&name)
+            } else {
+                None
+            };
+            let changed = new_id.is_some()
+                || (rename
+                    && selected_id
+                        .as_deref()
+                        .is_some_and(|id| settings.rename_category(id, &name)))
+                || (delete
+                    && selected_id
+                        .as_deref()
+                        .is_some_and(|id| settings.remove_category(id)));
+            if changed {
+                if delete {
+                    self.application_categories_selected_id = Some("other".to_owned());
+                    self.application_categories_name = choices
+                        .iter()
+                        .find(|(id, _)| id == "other")
+                        .map(|(_, label)| label.clone())
+                        .unwrap_or_default();
+                }
+                if let Some(id) = new_id {
+                    self.application_categories_selected_id = Some(id);
+                }
+                save_app_settings(&self.app_settings);
+            }
+        }
+        if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+            || close
+            || !open
+        {
+            self.application_categories_open = false;
+        }
     }
 
     fn ensure_application_layout_settings(&mut self) {
@@ -980,6 +1156,7 @@ impl EntropyApp {
         self.application_picker_selected = None;
         self.application_picker_name.clear();
         self.application_picker_category_changed = false;
+        self.application_picker_custom_category_id = None;
         self.application_picker_category =
             crate::application_layouts::ApplicationLayoutCategory::Other;
 
@@ -993,14 +1170,18 @@ impl EntropyApp {
                 })
                 .cloned();
             if let Some(layout) = selected {
-                self.application_picker_category = self
-                    .application_layout_editor_grouped_options(
-                        &self.application_layout_editor_options(),
-                    )
-                    .into_iter()
-                    .find(|(_, entries)| entries.iter().any(|(id, _)| id == &layout.id))
-                    .map(|(category, _)| category)
-                    .unwrap_or(crate::application_layouts::ApplicationLayoutCategory::Other);
+                let category_id = self
+                    .application_layout_settings()
+                    .map(|settings| settings.category_id_for_layout(&layout))
+                    .unwrap_or_else(|| "other".to_owned());
+                self.application_picker_custom_category_id = category_id
+                    .starts_with("custom:")
+                    .then(|| category_id.clone());
+                self.application_picker_category =
+                    crate::application_layouts::ApplicationLayoutCategory::ALL
+                        .into_iter()
+                        .find(|category| category.id() == category_id)
+                        .unwrap_or(crate::application_layouts::ApplicationLayoutCategory::Other);
                 self.application_picker_name = layout.name.clone();
                 self.application_picker_target_layout_id = Some(layout.id.clone());
                 self.application_picker_selected =
@@ -1057,13 +1238,22 @@ impl EntropyApp {
                 .is_none_or(|id| {
                     self.application_layout_settings()
                         .and_then(|settings| settings.layouts.get(id))
-                        .is_some_and(|layout| layout.category.is_none())
+                        .is_some_and(|layout| {
+                            layout.category.is_none() && layout.custom_category_id.is_none()
+                        })
                 })
         {
+            self.application_picker_custom_category_id = None;
             self.application_picker_category =
                 super::application_layout_runtime::application_layout_category_for_executable(
                     &application.executable,
                 );
+            if self.application_layout_settings().is_some_and(|settings| {
+                !settings.category_exists(self.application_picker_category.id())
+            }) {
+                self.application_picker_category =
+                    crate::application_layouts::ApplicationLayoutCategory::Other;
+            }
         }
         self.application_picker_selected = Some(application);
     }
@@ -1159,13 +1349,11 @@ impl EntropyApp {
                         ui.add_space(metrics.value(8.0));
                         ui.label(RichText::new(app_layout_text(language, "Категория", "Category"))
                             .size(metrics.value(12.0)).color(app_muted_text(ui.visuals().dark_mode)));
-                        let categories = Category::ALL;
-                        let labels = categories.iter()
-                            .map(|category| super::application_layout_runtime::application_layout_category_label(*category, language).to_owned())
-                            .collect::<Vec<_>>();
-                        let selected = categories.iter()
-                            .position(|category| *category == self.application_picker_category)
-                            .unwrap_or(0);
+                        let categories = self.application_layout_category_choices(language);
+                        let labels = categories.iter().map(|(_, label)| label.clone()).collect::<Vec<_>>();
+                        let selected_id = self.application_picker_custom_category_id.as_deref()
+                            .unwrap_or(self.application_picker_category.id());
+                        let selected = categories.iter().position(|(id, _)| id == selected_id).unwrap_or(0);
                         let (_, picked) = crate::ui_style::modern_dropdown_select_sized(
                             ui,
                             ui.make_persistent_id("application_picker_category"),
@@ -1177,7 +1365,11 @@ impl EntropyApp {
                         );
                         if let Some(index) = picked {
                             self.application_picker_category_changed = true;
-                            self.application_picker_category = categories[index];
+                            let id = &categories[index].0;
+                            self.application_picker_custom_category_id = id.starts_with("custom:").then(|| id.clone());
+                            if let Some(category) = Category::ALL.iter().find(|category| category.id() == id) {
+                                self.application_picker_category = *category;
+                            }
                         }
                     }
                     ui.add_space(metrics.value(10.0));
@@ -1393,6 +1585,7 @@ impl EntropyApp {
             self.application_picker_target_layout_id = None;
             self.application_picker_name.clear();
             self.application_picker_category_changed = false;
+            self.application_picker_custom_category_id = None;
         }
         self.application_picker_open = open;
     }
@@ -1428,7 +1621,11 @@ impl EntropyApp {
                 "",
             );
             let category_changed = self.application_picker_category_changed
-                && settings.set_layout_category(target_id, self.application_picker_category);
+                && if let Some(id) = self.application_picker_custom_category_id.as_deref() {
+                    settings.set_layout_category_id(target_id, id)
+                } else {
+                    settings.set_layout_category(target_id, self.application_picker_category)
+                };
             if changed || category_changed {
                 save_app_settings(&self.app_settings);
             }
@@ -1442,7 +1639,11 @@ impl EntropyApp {
                 "",
             );
             if self.application_picker_category_changed {
-                settings.set_layout_category(&id, self.application_picker_category);
+                if let Some(category_id) = self.application_picker_custom_category_id.as_deref() {
+                    settings.set_layout_category_id(&id, category_id);
+                } else {
+                    settings.set_layout_category(&id, self.application_picker_category);
+                }
             }
             save_app_settings(&self.app_settings);
         }
@@ -2113,6 +2314,64 @@ mod tests {
     }
 
     #[test]
+    fn category_manager_shows_crud_controls_and_escape_closes_it() {
+        let mut app = EntropyApp::new_inert_for_test();
+        app.app_settings.language = crate::i18n::Language::English;
+        let key = "offline-macropad-category-manager".to_owned();
+        app.app_settings.application_layouts.insert(
+            key.clone(),
+            crate::application_layouts::DeviceApplicationLayouts::default(),
+        );
+        app.app_settings.last_application_layout_device_key = Some(key);
+        app.application_categories_open = true;
+        app.application_categories_selected_id = Some("browsers".to_owned());
+        app.application_categories_name = "Browsers".to_owned();
+        let ctx = egui::Context::default();
+        let mut output = None;
+        for _ in 0..3 {
+            output = Some(ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(480.0, 480.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.draw_application_categories_modal(ui.ctx()),
+            ));
+        }
+        let output = output.unwrap();
+        for label in [
+            "Autolayer categories",
+            "Create",
+            "Rename",
+            "Delete",
+            "Close",
+        ] {
+            assert!(
+                output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text() == label
+                    && text.visual_bounding_rect().bottom() < 480.0)),
+                "missing {label}"
+            );
+        }
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ui| app.draw_application_categories_modal(ui.ctx()),
+        );
+        assert!(!app.application_categories_open);
+    }
+
+    #[test]
     fn add_application_dialog_shows_name_category_and_add_on_small_screen() {
         let mut app = EntropyApp::new_inert_for_test();
         app.app_settings.language = crate::i18n::Language::English;
@@ -2238,7 +2497,7 @@ mod tests {
             app.application_layout_editor_grouped_options(&app.application_layout_editor_options());
         assert!(groups
             .iter()
-            .any(|(category, entries)| *category == Category::Development
+            .any(|(category, entries)| category == Category::Development.id()
                 && entries
                     .iter()
                     .any(|(id, name)| id == &new.id && name == "Research")));
@@ -2347,7 +2606,7 @@ mod tests {
             app.application_layout_editor_grouped_options(&app.application_layout_editor_options());
         assert!(groups
             .iter()
-            .any(|(category, entries)| *category == Category::Browsers
+            .any(|(category, entries)| category == Category::Browsers.id()
                 && entries
                     .iter()
                     .any(|(id, name)| id == &telegram && name == "Work chat")));

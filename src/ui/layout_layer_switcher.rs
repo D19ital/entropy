@@ -1020,7 +1020,7 @@ mod tests {
             .iter()
             .map(|(category, entries)| {
                 (
-                    *category,
+                    category.as_str(),
                     entries
                         .iter()
                         .map(|(_, name)| name.as_str())
@@ -1031,13 +1031,13 @@ mod tests {
         assert_eq!(
             summary,
             vec![
-                (Category::Browsers, vec!["Firefox"]),
-                (Category::Development, vec!["Code"]),
-                (Category::Graphics, vec!["Blender"]),
-                (Category::Video, vec!["OBS"]),
-                (Category::Audio, vec!["Audacity"]),
-                (Category::Communication, vec!["Discord"]),
-                (Category::Other, vec!["Custom Tool"]),
+                (Category::Browsers.id(), vec!["Firefox"]),
+                (Category::Development.id(), vec!["Code"]),
+                (Category::Graphics.id(), vec!["Blender"]),
+                (Category::Video.id(), vec!["OBS"]),
+                (Category::Audio.id(), vec!["Audacity"]),
+                (Category::Communication.id(), vec!["Discord"]),
+                (Category::Other.id(), vec!["Custom Tool"]),
             ]
         );
     }
