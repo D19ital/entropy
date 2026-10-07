@@ -291,6 +291,7 @@ impl EntropyApp {
         let selected_id = ids.get(selected).cloned();
         let mut open = true;
         let mut add = false;
+        let mut begin_add = false;
         let mut save_name = false;
         let mut delete = false;
         let mut selection_changed = false;
@@ -358,17 +359,12 @@ impl EntropyApp {
             ui.horizontal(|ui| {
                 let button_size = metrics.size(112.0, 32.0);
                 if self.application_categories_selected_id.is_some() {
-                    delete = crate::ui_style::modern_button(
+                    begin_add = crate::ui_style::modern_button(
                         ui,
-                        app_layout_text(language, "Удалить", "Delete"),
+                        app_layout_text(language, "Добавить", "Add"),
                         button_size,
-                        self.application_categories_selected_id.as_deref() != Some("other"),
+                        true,
                     )
-                    .on_hover_text(app_layout_text(
-                        language,
-                        "Приложения из удалённой категории перейдут в «Другие»",
-                        "Applications in a deleted category move to Other",
-                    ))
                     .clicked();
                 } else {
                     add = crate::ui_style::modern_button(
@@ -379,8 +375,26 @@ impl EntropyApp {
                     )
                     .clicked();
                 }
+                delete = crate::ui_style::modern_button(
+                    ui,
+                    app_layout_text(language, "Удалить", "Delete"),
+                    button_size,
+                    self.application_categories_selected_id
+                        .as_deref()
+                        .is_some_and(|id| id != "other"),
+                )
+                .on_hover_text(app_layout_text(
+                    language,
+                    "Приложения из удалённой категории перейдут в «Другие»",
+                    "Applications in a deleted category move to Other",
+                ))
+                .clicked();
             });
         });
+        if begin_add {
+            self.application_categories_selected_id = None;
+            self.application_categories_name.clear();
+        }
         let name = self.application_categories_name.trim().to_owned();
         if let Some(settings) = self.application_layout_settings_mut() {
             let new_id = if add {
@@ -390,6 +404,7 @@ impl EntropyApp {
             };
             let changed = new_id.is_some()
                 || (save_name
+                    && !begin_add
                     && !delete
                     && selected_id
                         .as_deref()
@@ -2394,7 +2409,7 @@ mod tests {
             ));
         }
         let output = output.unwrap();
-        for label in ["Categories", "Category", "Delete"] {
+        for label in ["Categories", "Category", "Add", "Delete"] {
             assert!(
                 output.shapes.iter().any(|shape| matches!(&shape.shape,
                 egui::Shape::Text(text) if text.galley.text() == label
@@ -2421,7 +2436,39 @@ mod tests {
             window.width() <= 400.0 && window.height() <= 240.0,
             "{window:?}"
         );
-        app.application_categories_selected_id = None;
+        let add_position = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Add" => {
+                    Some(text.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .expect("Add button text");
+        for pressed in [true, false] {
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(480.0, 480.0),
+                    )),
+                    events: vec![
+                        egui::Event::PointerMoved(add_position),
+                        egui::Event::PointerButton {
+                            pos: add_position,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ui| app.draw_application_categories_modal(ui.ctx()),
+            );
+        }
+        assert_eq!(app.application_categories_selected_id, None);
+        assert!(app.application_categories_name.is_empty());
         app.application_categories_name = "Projects".to_owned();
         let create_output = ctx.run_ui(egui::RawInput::default(), |ui| {
             app.draw_application_categories_modal(ui.ctx());
