@@ -1382,6 +1382,9 @@ impl EntropyApp {
                 open = !self.apply_picker_selection(application);
             }
         }
+        if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            cancel = true;
+        }
         if cancel {
             open = false;
         }
@@ -2060,6 +2063,53 @@ mod tests {
         assert!((edit_clean.0.top() - edit_invalid.0.top()).abs() <= 1.0);
         assert!((edit_clean.0.bottom() - edit_invalid.0.bottom()).abs() <= 1.0);
         assert!((edit_clean.1 - edit_invalid.1).abs() <= 1.0);
+    }
+
+    #[test]
+    fn escape_cancels_application_picker_without_saving_drafts() {
+        for edit in [false, true] {
+            let mut app = EntropyApp::new_inert_for_test();
+            app.app_settings.language = crate::i18n::Language::English;
+            let key = "offline-macropad-escape-picker-test".to_owned();
+            let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+            settings.create_for_application(&detected_application("firefox", "Firefox"));
+            app.app_settings
+                .application_layouts
+                .insert(key.clone(), settings);
+            app.app_settings.last_application_layout_device_key = Some(key.clone());
+            app.open_application_picker(edit);
+            app.application_picker_name = "Unsaved name".to_owned();
+            let ctx = egui::Context::default();
+            for _ in 0..3 {
+                ctx.run_ui(egui::RawInput::default(), |ui| {
+                    app.draw_application_picker_v2(ui.ctx());
+                });
+            }
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key: egui::Key::Escape,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                },
+                |ui| {
+                    app.draw_application_picker_v2(ui.ctx());
+                    assert!(!ui.input(|input| input.key_pressed(egui::Key::Escape)));
+                },
+            );
+            assert!(!app.application_picker_open);
+            assert!(app.application_picker_selected.is_none());
+            assert!(app.application_picker_name.is_empty());
+            let saved = &app.app_settings.application_layouts[&key];
+            assert!(!saved
+                .layouts
+                .values()
+                .any(|layout| layout.name == "Unsaved name"));
+        }
     }
 
     #[test]

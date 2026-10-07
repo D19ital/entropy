@@ -1359,7 +1359,8 @@ impl eframe::App for EntropyApp {
         let import_pending_at_frame_start = self.import_pending();
         #[cfg(target_arch = "wasm32")]
         let import_pending_at_frame_start = false;
-        let modal_or_popup_open_at_frame_start = self.keycode_picker.open
+        let modal_or_popup_open_at_frame_start = self.application_picker_open
+            || self.keycode_picker.open
             || self.unlock_open
             || self.vial_unlock_polling
             || self.close_to_tray_prompt_open
