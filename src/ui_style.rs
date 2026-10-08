@@ -583,6 +583,37 @@ pub fn modern_text_field_sized(
     )
 }
 
+pub fn modern_text_preview_field_sized(
+    ui: &mut Ui,
+    id: egui::Id,
+    text: &str,
+    width: f32,
+    height: f32,
+    hint: &str,
+) -> egui::Response {
+    let mut display = text.to_owned();
+    let field_rect = paint_modern_text_field_frame(ui, id, width, height, false);
+    let inner_rect = field_rect.shrink2(Vec2::new(10.0, 0.0));
+    allocate_ui_at_rect(ui, inner_rect, |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(inner_rect));
+        ui.add_sized(
+            inner_rect.size(),
+            egui::TextEdit::singleline(&mut display)
+                .id(id)
+                .hint_text(hint)
+                .font(FontId::proportional(12.5 * (height / 32.0).clamp(1.0, 1.3)))
+                .frame(egui::Frame::NONE)
+                .interactive(false)
+                .vertical_align(egui::Align::Center),
+        );
+    });
+    let response = ui.interact(field_rect, id.with("preview_click"), Sense::click());
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
+}
+
 pub fn modern_multiline_text_field_sized(
     ui: &mut Ui,
     id: egui::Id,
@@ -698,12 +729,15 @@ pub fn modern_text_field_sized_with_layouter(
     hint: &str,
     char_limit: usize,
     horizontal_align: egui::Align,
+    interactive: bool,
     layouter: &mut dyn FnMut(&Ui, &dyn egui::TextBuffer, f32) -> std::sync::Arc<egui::Galley>,
 ) -> egui::widgets::text_edit::TextEditOutput {
     let font_size = 12.5 * (height / 32.0).clamp(1.0, 1.3);
-    let field_rect = paint_modern_text_field_frame(ui, id, width, height, true);
+    let field_rect = paint_modern_text_field_frame(ui, id, width, height, interactive);
     let inner_size = Vec2::new(width - 20.0, height);
-    let output = allocate_ui_at_rect(ui, field_rect.shrink2(Vec2::new(10.0, 0.0)), |ui| {
+    let inner_rect = field_rect.shrink2(Vec2::new(10.0, 0.0));
+    let output = allocate_ui_at_rect(ui, inner_rect, |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(inner_rect));
         egui::TextEdit::singleline(text)
             .id(id)
             .desired_width(inner_size.x)
@@ -712,13 +746,14 @@ pub fn modern_text_field_sized_with_layouter(
             .font(FontId::proportional(font_size))
             .char_limit(char_limit)
             .frame(egui::Frame::NONE)
+            .interactive(interactive)
             .horizontal_align(horizontal_align)
             .vertical_align(egui::Align::Center)
             .layouter(layouter)
             .show(ui)
     })
     .inner;
-    if output.response.hovered() {
+    if output.response.hovered() && interactive {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
     }
     output
@@ -1714,6 +1749,65 @@ fn settings_switch_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_rule_trigger_preview_is_click_only_and_clipped() {
+        let ctx = egui::Context::default();
+        let text = "shortcut".repeat(40);
+        let rect = std::cell::Cell::new(egui::Rect::NOTHING);
+        let clicked = std::cell::Cell::new(false);
+        let frame = |events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 120.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let response = modern_text_preview_field_sized(
+                        ui,
+                        egui::Id::new("trigger-preview-test"),
+                        &text,
+                        82.0,
+                        32.0,
+                        "",
+                    );
+                    rect.set(response.rect);
+                    clicked.set(response.clicked());
+                },
+            )
+        };
+        let output = frame(Vec::new());
+        assert!(output
+            .shapes
+            .iter()
+            .filter(|shape| matches!(shape.shape, egui::Shape::Text(_)))
+            .all(|shape| shape.clip_rect.right() <= rect.get().right() + 0.1));
+        let pos = rect.get().center();
+        assert_eq!(
+            frame(vec![egui::Event::PointerMoved(pos)])
+                .platform_output
+                .cursor_icon,
+            egui::CursorIcon::PointingHand
+        );
+        frame(vec![egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        }]);
+        frame(vec![egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }]);
+        assert!(clicked.get());
+        assert_eq!(text, "shortcut".repeat(40));
+    }
 
     #[test]
     fn expanded_multiline_field_has_no_gray_background() {
