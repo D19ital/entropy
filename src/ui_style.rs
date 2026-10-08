@@ -583,40 +583,6 @@ pub fn modern_text_field_sized(
     )
 }
 
-/// A compact field-shaped entry point for editing longer text in a separate window.
-pub fn modern_text_field_preview_button(
-    ui: &mut Ui,
-    id: egui::Id,
-    text: &str,
-    hint: &str,
-    size: Vec2,
-) -> egui::Response {
-    let rect = paint_modern_text_field_frame(ui, id, size.x, size.y, true);
-    let response = ui.interact(rect, id, Sense::click());
-    let clip = rect.shrink2(Vec2::new(10.0, 2.0));
-    let display = if text.is_empty() {
-        hint.to_owned()
-    } else {
-        text.replace('\n', " ↵ ")
-    };
-    let color = if text.is_empty() {
-        muted_text(ui.visuals().dark_mode)
-    } else {
-        ui.visuals().text_color()
-    };
-    ui.painter().with_clip_rect(clip).text(
-        egui::pos2(clip.left(), clip.center().y),
-        egui::Align2::LEFT_CENTER,
-        display,
-        FontId::proportional(12.5),
-        color,
-    );
-    if response.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-    response
-}
-
 pub fn modern_multiline_text_field_sized(
     ui: &mut Ui,
     id: egui::Id,
@@ -625,7 +591,16 @@ pub fn modern_multiline_text_field_sized(
     hint: &str,
     char_limit: usize,
 ) -> egui::Response {
-    let rect = paint_modern_text_field_frame(ui, id, size.x, size.y, true);
+    // Let the modal surface show through; the large editor needs an outline,
+    // not a second gray panel behind the text.
+    let rect = paint_modern_text_field_frame_with_fill(
+        ui,
+        id,
+        size.x,
+        size.y,
+        true,
+        Some(Color32::TRANSPARENT),
+    );
     let inner_size = (size - Vec2::new(20.0, 20.0)).max(Vec2::new(1.0, 1.0));
     let response = allocate_ui_at_rect(ui, rect.shrink2(Vec2::splat(10.0)), |ui| {
         egui::ScrollArea::vertical()
@@ -756,6 +731,17 @@ fn paint_modern_text_field_frame(
     height: f32,
     interactive: bool,
 ) -> egui::Rect {
+    paint_modern_text_field_frame_with_fill(ui, id, width, height, interactive, None)
+}
+
+fn paint_modern_text_field_frame_with_fill(
+    ui: &mut Ui,
+    id: egui::Id,
+    width: f32,
+    height: f32,
+    interactive: bool,
+    fill_override: Option<Color32>,
+) -> egui::Rect {
     let dark = ui.visuals().dark_mode;
     let field_size = Vec2::new(width, height);
     let (field_rect, _) = ui.allocate_exact_size(field_size, Sense::hover());
@@ -780,7 +766,7 @@ fn paint_modern_text_field_frame(
     ui.painter().rect(
         field_rect,
         9.0,
-        field_fill,
+        fill_override.unwrap_or(field_fill),
         modal_outline_stroke(dark),
         egui::StrokeKind::Inside,
     );
@@ -1728,6 +1714,40 @@ fn settings_switch_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expanded_multiline_field_has_no_gray_background() {
+        for visuals in [egui::Visuals::dark(), egui::Visuals::light()] {
+            let ctx = egui::Context::default();
+            ctx.set_visuals(visuals);
+            let mut text = "Text".to_owned();
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600.0, 400.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    modern_multiline_text_field_sized(
+                        ui,
+                        ui.make_persistent_id("expanded_rule_text"),
+                        &mut text,
+                        egui::vec2(420.0, 180.0),
+                        "Text",
+                        480,
+                    );
+                },
+            );
+            assert!(output.shapes.iter().any(|clipped| {
+                matches!(&clipped.shape, egui::Shape::Rect(rect)
+                    if (rect.rect.width() - 420.0).abs() < 0.1
+                        && (rect.rect.height() - 180.0).abs() < 0.1
+                        && rect.fill == Color32::TRANSPARENT)
+            }));
+        }
+    }
 
     fn switch_frame(
         ctx: &egui::Context,
