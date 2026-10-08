@@ -67,10 +67,10 @@ impl EntropyApp {
         ui: &mut egui::Ui,
         center_x: f32,
         center_y: f32,
-    ) {
+    ) -> bool {
         let options = self.application_layout_editor_options();
         if options.is_empty() {
-            return;
+            return false;
         }
         let current_id = self
             .application_layout_settings()
@@ -119,11 +119,6 @@ impl EntropyApp {
         let dropdown_id = ui.make_persistent_id("layout_page_application_selector");
         let response = ui.allocate_rect(selector_rect, Sense::click());
         let language = self.app_settings.language;
-        response.clone().on_hover_text(app_layout_text(
-            language,
-            "Выбрать раскладку приложения или открыть настройки Автослоя",
-            "Choose an application layout or open Autolayer settings",
-        ));
         if response.clicked() {
             egui::Popup::toggle_id(ui.ctx(), dropdown_id);
         }
@@ -180,6 +175,7 @@ impl EntropyApp {
             }
             None => {}
         }
+        response.hovered()
     }
 
     fn main_menu_battery_status(&self) -> MainMenuBatteryStatus {
@@ -311,6 +307,7 @@ impl EntropyApp {
             } else {
                 Color32::from_gray(60)
             };
+            let mut layer_name_hovered = None;
 
             if self.editing_layer == Some(selected) {
                 // Limit input to 12 chars
@@ -542,16 +539,23 @@ impl EntropyApp {
                     text_color,
                 );
 
-                self.draw_layout_bottom_hints(
-                    ui,
-                    center_x,
-                    name_r.hovered() && layer_name_hover_available,
-                );
+                layer_name_hovered = Some(name_r.hovered() && layer_name_hover_available);
             }
 
             self.draw_main_menu_battery_status(ui, center_x, mid_y);
-            if self.show_main_menu_application_layout_switcher() {
-                self.draw_application_layout_switcher(ui, center_x, mid_y + 50.0);
+            let application_selector_hovered = if self.show_main_menu_application_layout_switcher()
+            {
+                self.draw_application_layout_switcher(ui, center_x, mid_y + 50.0)
+            } else {
+                false
+            };
+            if let Some(layer_name_hovered) = layer_name_hovered {
+                self.draw_layout_bottom_hints(
+                    ui,
+                    center_x,
+                    layer_name_hovered,
+                    application_selector_hovered,
+                );
             }
         }
     }
@@ -1067,17 +1071,18 @@ mod tests {
     }
 
     #[test]
-    fn application_selector_hover_explains_settings_entry() {
+    fn application_selector_hover_uses_bottom_hint_instead_of_tooltip() {
         let ctx = egui::Context::default();
         ctx.style_mut(|style| style.interaction.tooltip_delay = 0.0);
         let mut app = EntropyApp::new_inert_for_test();
         app.app_settings.language = crate::i18n::Language::English;
+        app.application_layout_editor_active = true;
         app.app_settings.application_layouts.insert(
             "offline-macropad".to_owned(),
             crate::application_layouts::DeviceApplicationLayouts::default(),
         );
         app.app_settings.last_application_layout_device_key = Some("offline-macropad".to_owned());
-        let selector = egui::pos2(450.0, 130.0);
+        let selector = egui::pos2(450.0, 146.0);
         let mut output = None;
         for time in [0.0, 1.0, 2.0] {
             output = Some(ctx.run_ui(
@@ -1090,13 +1095,41 @@ mod tests {
                     events: vec![egui::Event::PointerMoved(selector)],
                     ..Default::default()
                 },
-                |ui| app.draw_application_layout_switcher(ui, selector.x, selector.y),
+                |ui| app.draw_layout_layer_switcher_and_hints(ui, 6.0, 32.0, 68.0),
             ));
         }
         let output = output.unwrap();
-        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+        let hint = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text)
+                    if text.galley.text() == "Select a layout or configure Autolayer" =>
+                {
+                    Some(text)
+                }
+                _ => None,
+            })
+            .expect("Autolayer hint in shared footer");
+        assert!((hint.visual_bounding_rect().center().y - (650.0 - 36.0)).abs() < 2.0);
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
             egui::Shape::Text(text)
                 if text.galley.text() == "Choose an application layout or open Autolayer settings"
+        )));
+        let away = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 650.0),
+                )),
+                events: vec![egui::Event::PointerMoved(egui::pos2(50.0, 300.0))],
+                ..Default::default()
+            },
+            |ui| app.draw_layout_layer_switcher_and_hints(ui, 6.0, 32.0, 68.0),
+        );
+        assert!(!away.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text)
+                if text.galley.text() == "Select a layout or configure Autolayer"
         )));
     }
 
