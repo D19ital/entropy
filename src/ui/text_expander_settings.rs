@@ -145,13 +145,22 @@ impl EntropyApp {
     ) {
         let button_size = metrics.size(148.0, 30.0);
         #[cfg(target_os = "linux")]
-        let installed = crate::linux_setup::ibus_user_installation_is_current();
-        #[cfg(not(target_os = "linux"))]
-        let installed = false;
+        let registration = self.ibus_registration.get();
         #[cfg(target_os = "linux")]
-        let setup_running = self.linux_setup_task.is_some();
+        ui.ctx()
+            .request_repaint_after(crate::linux_setup::IBUS_REGISTRATION_MAX_AGE);
+        #[cfg(target_os = "linux")]
+        let action = text_expander_ibus_action(registration);
+        #[cfg(target_os = "linux")]
+        let setup_running = self.linux_setup_task.is_some() || self.pending_ibus_reload.is_some();
+        #[cfg(target_os = "linux")]
+        let delete_size = metrics.size(78.0, 30.0);
+        #[cfg(target_os = "linux")]
+        let button_gap = metrics.value(8.0);
+        #[cfg(target_os = "linux")]
+        let control_width = button_size.x + button_gap + delete_size.x;
         #[cfg(not(target_os = "linux"))]
-        let setup_running = false;
+        let control_width = button_size.x;
 
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
@@ -163,16 +172,62 @@ impl EntropyApp {
                 lang,
                 text_expander_backend_hint_key(),
             )),
-            button_size.x,
+            control_width,
             |ui| {
+                #[cfg(target_os = "linux")]
+                {
+                    ui.spacing_mut().item_spacing.x = button_gap;
+                    let primary_key = text_expander_ibus_button_key(action, setup_running);
+                    let primary_tooltip = match action {
+                        TextExpanderIbusAction::Install => text_expander_backend_hint_key(),
+                        TextExpanderIbusAction::Reinstall => "text_expander.reinstall_ibus_tooltip",
+                        TextExpanderIbusAction::Reload => {
+                            "universal_symbols_setup.reload_ibus_tooltip"
+                        }
+                    };
+                    if crate::ui_style::modern_button(
+                        ui,
+                        crate::i18n::tr_catalog(lang, primary_key),
+                        button_size,
+                        !setup_running,
+                    )
+                    .on_hover_text(crate::i18n::tr_catalog(lang, primary_tooltip))
+                    .clicked()
+                    {
+                        match action {
+                            TextExpanderIbusAction::Install | TextExpanderIbusAction::Reinstall => {
+                                self.run_linux_universal_symbols_setup(
+                                    "linux/ibus/install-user.sh",
+                                    "IBus",
+                                );
+                            }
+                            TextExpanderIbusAction::Reload => self.start_linux_ibus_reload(),
+                        }
+                    }
+                    if crate::ui_style::modern_button(
+                        ui,
+                        crate::i18n::tr_catalog(lang, "text_expander.delete_ibus_source"),
+                        delete_size,
+                        text_expander_ibus_delete_enabled(registration, setup_running),
+                    )
+                    .on_hover_text(crate::i18n::tr_catalog(
+                        lang,
+                        "universal_symbols_setup.remove_ibus_source_tooltip",
+                    ))
+                    .clicked()
+                    {
+                        self.run_linux_universal_symbols_setup(
+                            "linux/ibus/uninstall-user.sh",
+                            "IBus",
+                        );
+                    }
+                }
+                #[cfg(not(target_os = "linux"))]
                 if crate::ui_style::modern_button(
                     ui,
-                    crate::i18n::tr_catalog(
-                        lang,
-                        text_expander_backend_button_key(installed, setup_running),
-                    ),
+                    crate::i18n::tr_catalog(lang, text_expander_backend_button_key()),
                     button_size,
-                    !installed && !setup_running,
+                    true,
                 )
                 .on_hover_text(crate::i18n::tr_catalog(
                     lang,
@@ -180,9 +235,6 @@ impl EntropyApp {
                 ))
                 .clicked()
                 {
-                    #[cfg(target_os = "linux")]
-                    self.run_linux_universal_symbols_setup("linux/ibus/install-user.sh", "IBus");
-                    #[cfg(not(target_os = "linux"))]
                     self.open_text_expander_setup_page();
                 }
             },
@@ -190,23 +242,54 @@ impl EntropyApp {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
-fn text_expander_backend_button_key(installed: bool, setup_running: bool) -> &'static str {
-    #[cfg(target_os = "linux")]
-    {
-        if setup_running {
-            "universal_symbols_setup.ibus_installing"
-        } else if installed {
-            "universal_symbols_setup.ibus_installed"
-        } else {
-            "universal_symbols_setup.install_ibus"
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TextExpanderIbusAction {
+    Install,
+    Reinstall,
+    Reload,
+}
+
+#[cfg(target_os = "linux")]
+fn text_expander_ibus_action(
+    registration: crate::linux_setup::IbusRegistration,
+) -> TextExpanderIbusAction {
+    if registration.system {
+        TextExpanderIbusAction::Reload
+    } else if registration.user {
+        TextExpanderIbusAction::Reinstall
+    } else {
+        TextExpanderIbusAction::Install
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn text_expander_ibus_delete_enabled(
+    registration: crate::linux_setup::IbusRegistration,
+    setup_running: bool,
+) -> bool {
+    registration.user && !setup_running
+}
+
+#[cfg(target_os = "linux")]
+fn text_expander_ibus_button_key(
+    action: TextExpanderIbusAction,
+    setup_running: bool,
+) -> &'static str {
+    if setup_running {
+        "text_expander.ibus_working"
+    } else {
+        match action {
+            TextExpanderIbusAction::Install => "universal_symbols_setup.install_ibus",
+            TextExpanderIbusAction::Reinstall => "text_expander.reinstall_ibus_source",
+            TextExpanderIbusAction::Reload => "universal_symbols_setup.reload_ibus_button",
         }
     }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = (installed, setup_running);
-        "text_expander.open_backend_setup"
-    }
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "linux")))]
+fn text_expander_backend_button_key() -> &'static str {
+    "text_expander.open_backend_setup"
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -234,5 +317,75 @@ fn text_expander_backend_hint_key() -> &'static str {
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
         "text_expander.backend_hint_unsupported"
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod ibus_action_tests {
+    use super::*;
+    use crate::linux_setup::IbusRegistration;
+
+    #[test]
+    fn installed_user_source_offers_reinstall_and_delete() {
+        let missing = IbusRegistration {
+            user: false,
+            system: false,
+        };
+        let user = IbusRegistration {
+            user: true,
+            system: false,
+        };
+        let system = IbusRegistration {
+            user: false,
+            system: true,
+        };
+        let both = IbusRegistration {
+            user: true,
+            system: true,
+        };
+
+        assert_eq!(
+            text_expander_ibus_action(missing),
+            TextExpanderIbusAction::Install
+        );
+        assert_eq!(
+            text_expander_ibus_action(user),
+            TextExpanderIbusAction::Reinstall
+        );
+        assert_eq!(
+            text_expander_ibus_action(system),
+            TextExpanderIbusAction::Reload
+        );
+        assert_eq!(
+            text_expander_ibus_action(both),
+            TextExpanderIbusAction::Reload
+        );
+        assert!(!text_expander_ibus_delete_enabled(missing, false));
+        assert!(text_expander_ibus_delete_enabled(user, false));
+        assert!(!text_expander_ibus_delete_enabled(system, false));
+        assert!(text_expander_ibus_delete_enabled(both, false));
+        assert!(!text_expander_ibus_delete_enabled(user, true));
+        assert_eq!(
+            text_expander_ibus_button_key(TextExpanderIbusAction::Reinstall, false),
+            "text_expander.reinstall_ibus_source"
+        );
+        assert_eq!(
+            text_expander_ibus_button_key(TextExpanderIbusAction::Reinstall, true),
+            "text_expander.ibus_working"
+        );
+    }
+
+    #[test]
+    fn source_management_labels_are_localized() {
+        for language in crate::i18n::Language::ALL {
+            for key in [
+                "text_expander.reinstall_ibus_source",
+                "text_expander.delete_ibus_source",
+                "text_expander.reinstall_ibus_tooltip",
+                "text_expander.ibus_working",
+            ] {
+                assert_ne!(crate::i18n::tr_catalog(language, key), key);
+            }
+        }
     }
 }
