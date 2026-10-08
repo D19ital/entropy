@@ -54,6 +54,16 @@ fn layer_name_edit_is_available(hover_available: bool, background_layer_active: 
     hover_available && !background_layer_active
 }
 
+fn layer_name_text_color(dark_mode: bool, hovered: bool) -> Color32 {
+    if hovered {
+        app_accent()
+    } else if dark_mode {
+        Color32::from_gray(245)
+    } else {
+        Color32::from_gray(60)
+    }
+}
+
 impl EntropyApp {
     pub(super) fn show_main_menu_application_layout_switcher(&self) -> bool {
         self.application_layout_editor_active
@@ -301,11 +311,7 @@ impl EntropyApp {
                 size: display_label_size,
                 family: egui::FontFamily::Proportional,
             };
-            let text_color = if self.dark_mode {
-                Color32::from_gray(245)
-            } else {
-                Color32::from_gray(60)
-            };
+            let text_color = layer_name_text_color(self.dark_mode, false);
             let mut layer_name_hovered = None;
 
             if self.editing_layer == Some(selected) {
@@ -476,7 +482,8 @@ impl EntropyApp {
                 let layer_name_hover_available = true;
                 #[cfg(target_arch = "wasm32")]
                 let layer_name_edit_available = layer_name_hover_available;
-                if name_r.hovered() && layer_name_hover_available {
+                let name_hovered = name_r.hovered() && layer_name_hover_available;
+                if name_hovered {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
                 if name_r.clicked() && layer_name_edit_available && !self.editing_layout_visibility
@@ -535,10 +542,13 @@ impl EntropyApp {
                     egui::Align2::CENTER_CENTER,
                     &name,
                     label_font,
-                    text_color,
+                    layer_name_text_color(
+                        self.dark_mode,
+                        name_hovered && !self.editing_layout_visibility,
+                    ),
                 );
 
-                layer_name_hovered = Some(name_r.hovered() && layer_name_hover_available);
+                layer_name_hovered = Some(name_hovered);
             }
 
             self.draw_main_menu_battery_status(ui, center_x, mid_y);
@@ -569,7 +579,7 @@ mod tests {
 
     use super::{
         app_layout_text, layer_after_wheel, layer_name_edit_is_available,
-        layer_name_hover_is_available, main_menu_battery_status,
+        layer_name_hover_is_available, layer_name_text_color, main_menu_battery_status,
         main_menu_reserves_battery_status_space, MainMenuBatteryStatus,
     };
 
@@ -625,6 +635,17 @@ mod tests {
         assert!(layer_name_hover_is_available(false, true));
         assert!(!layer_name_hover_is_available(false, false));
         assert!(!layer_name_hover_is_available(true, false));
+    }
+
+    #[test]
+    fn layer_name_uses_selector_accent_only_on_hover() {
+        for dark_mode in [false, true] {
+            assert_eq!(layer_name_text_color(dark_mode, true), super::app_accent());
+            assert_ne!(
+                layer_name_text_color(dark_mode, false),
+                layer_name_text_color(dark_mode, true)
+            );
+        }
     }
 
     #[test]
