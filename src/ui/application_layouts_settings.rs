@@ -356,40 +356,46 @@ impl EntropyApp {
                     || (name_response.has_focus()
                         && ui.input(|input| input.key_pressed(egui::Key::Enter))));
             ui.add_space(metrics.value(12.0));
-            ui.horizontal(|ui| {
-                let button_size = metrics.size(112.0, 32.0);
-                if self.application_categories_selected_id.is_some() {
-                    begin_add = crate::ui_style::modern_button(
-                        ui,
-                        app_layout_text(language, "Добавить", "Add"),
-                        button_size,
-                        true,
-                    )
-                    .clicked();
-                } else {
-                    add = crate::ui_style::modern_button(
-                        ui,
-                        app_layout_text(language, "Создать", "Create"),
-                        button_size,
-                        unique_name,
-                    )
-                    .clicked();
-                }
-                delete = crate::ui_style::modern_button(
+            let button_size = metrics.size(112.0, 32.0);
+            let (action_rect, _) =
+                ui.allocate_exact_size(egui::vec2(width, button_size.y), egui::Sense::hover());
+            let actions =
+                centered_button_pair_geometry(action_rect, button_size, metrics.value(8.0));
+            let first = crate::ui_style::allocate_ui_at_rect(ui, actions.leading, |ui| {
+                crate::ui_style::modern_button(
+                    ui,
+                    if self.application_categories_selected_id.is_some() {
+                        app_layout_text(language, "Добавить", "Add")
+                    } else {
+                        app_layout_text(language, "Создать", "Create")
+                    },
+                    actions.leading.size(),
+                    self.application_categories_selected_id.is_some() || unique_name,
+                )
+            })
+            .inner;
+            if self.application_categories_selected_id.is_some() {
+                begin_add = first.clicked();
+            } else {
+                add = first.clicked();
+            }
+            delete = crate::ui_style::allocate_ui_at_rect(ui, actions.trailing, |ui| {
+                crate::ui_style::modern_button(
                     ui,
                     app_layout_text(language, "Удалить", "Delete"),
-                    button_size,
+                    actions.trailing.size(),
                     self.application_categories_selected_id
                         .as_deref()
                         .is_some_and(|id| id != "other"),
                 )
-                .on_hover_text(app_layout_text(
-                    language,
-                    "Приложения из удалённой категории перейдут в «Другие»",
-                    "Applications in a deleted category move to Other",
-                ))
-                .clicked();
-            });
+            })
+            .inner
+            .on_hover_text(app_layout_text(
+                language,
+                "Приложения из удалённой категории перейдут в «Другие»",
+                "Applications in a deleted category move to Other",
+            ))
+            .clicked();
         });
         if begin_add {
             self.application_categories_selected_id = None;
@@ -2436,6 +2442,23 @@ mod tests {
             window.width() <= 400.0 && window.height() <= 240.0,
             "{window:?}"
         );
+        let button_label_center = |shapes: &[egui::epaint::ClippedShape], label: &str| {
+            shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.visual_bounding_rect().center())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing button {label}"))
+        };
+        let add_center = button_label_center(&output.shapes, "Add");
+        let delete_center = button_label_center(&output.shapes, "Delete");
+        assert!(
+            ((add_center.x + delete_center.x) / 2.0 - window.center().x).abs() < 2.0,
+            "Add {add_center:?}, Delete {delete_center:?}, window {window:?}"
+        );
         let add_position = output
             .shapes
             .iter()
@@ -2478,6 +2501,12 @@ mod tests {
             .iter()
             .any(|shape| matches!(&shape.shape,
             egui::Shape::Text(text) if text.galley.text() == "Create")));
+        let create_center = button_label_center(&create_output.shapes, "Create");
+        let delete_center = button_label_center(&create_output.shapes, "Delete");
+        assert!(
+            ((create_center.x + delete_center.x) / 2.0 - window.center().x).abs() < 2.0,
+            "Create {create_center:?}, Delete {delete_center:?}, window {window:?}"
+        );
         let _ = ctx.run_ui(
             egui::RawInput {
                 events: vec![egui::Event::Key {
