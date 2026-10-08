@@ -83,19 +83,18 @@ impl EntropyApp {
             .position(|(id, _)| id == &current_id)
             .unwrap_or(0);
         let current_name = options[current_index].1.clone();
-        let visible_name: String = current_name.chars().take(14).collect();
         let selector_width = 200.0;
         let selector_height = 34.0;
-        let name_size = if visible_name.chars().count() > 11 {
+        let name_size = if current_name.chars().count() > 11 {
             18.0
-        } else if visible_name.chars().count() > 8 {
+        } else if current_name.chars().count() > 8 {
             21.0
         } else {
             26.0
         };
         let name_font = FontId::proportional(name_size);
         let name_galley = ui.fonts_mut(|fonts| {
-            fonts.layout_no_wrap(visible_name.clone(), name_font.clone(), Color32::WHITE)
+            fonts.layout_no_wrap(current_name.clone(), name_font.clone(), Color32::WHITE)
         });
         let name_extent = name_galley.size();
         let chevron_half_width = 4.5;
@@ -141,7 +140,7 @@ impl EntropyApp {
         ui.painter().text(
             egui::pos2(center_x, center_y),
             egui::Align2::CENTER_CENTER,
-            visible_name,
+            current_name,
             name_font,
             text_color,
         );
@@ -750,6 +749,60 @@ mod tests {
             .automatic_switching_enabled = true;
         assert!(app.show_main_menu_application_layout_switcher());
         assert!(render(&mut app), "selector returns when enabled");
+    }
+
+    #[test]
+    fn application_selector_shows_full_program_name_in_main_menu() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        let device_key = "offline-macropad-full-program-name".to_owned();
+        let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+        let id = settings.create_for_application_named(
+            &crate::application_layouts::DetectedApplication {
+                executable: "firefox".to_owned(),
+                ..Default::default()
+            },
+            Some("Mozilla Firefox"),
+            "",
+        );
+        settings.active_layout_id = id;
+        app.app_settings
+            .application_layouts
+            .insert(device_key.clone(), settings);
+        app.app_settings.last_application_layout_device_key = Some(device_key);
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 650.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                app.draw_application_layout_switcher(ui, 450.0, 130.0);
+            },
+        );
+        let name = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Mozilla Firefox" => {
+                    assert!(shape.clip_rect.contains_rect(text.visual_bounding_rect()));
+                    Some(text)
+                }
+                _ => None,
+            })
+            .expect("full name must be painted without the former 14-character cutoff");
+        let chevron_left = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::LineSegment { points, .. } => Some(points[0].x.min(points[1].x)),
+                _ => None,
+            })
+            .fold(f32::INFINITY, f32::min);
+        let gap = chevron_left - name.visual_bounding_rect().right();
+        assert!((8.0..=10.0).contains(&gap), "chevron gap: {gap}");
     }
 
     #[test]
