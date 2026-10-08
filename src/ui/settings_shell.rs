@@ -350,6 +350,61 @@ impl EntropyApp {
 mod tests {
     use super::*;
 
+    #[test]
+    fn leaving_autolayer_closes_dialogs_and_discards_drafts() {
+        let layout = KeyboardLayout::from_vial_json(&serde_json::json!({
+            "name": "Test keyboard",
+            "matrix": { "rows": 1, "cols": 1 },
+            "layouts": { "keymap": [["0,0"]] }
+        }))
+        .unwrap();
+        for (picker, assign_existing) in [(false, false), (true, false), (true, true)] {
+            for (tab, menu) in [
+                (SettingsTab::AppSettings, MainMenuTab::Settings),
+                (SettingsTab::ApplicationLayouts, MainMenuTab::Keyboard),
+            ] {
+                let ctx = egui::Context::default();
+                let mut app = EntropyApp::new_inert_for_test();
+                app.open_application_layouts_page();
+                if picker {
+                    app.application_picker_open = true;
+                    app.application_picker_assign_existing = assign_existing;
+                    app.application_picker_target_layout_id =
+                        assign_existing.then(|| "draft-target".to_owned());
+                    app.application_picker_name = "Unsaved name".to_owned();
+                } else {
+                    app.application_categories_open = true;
+                    app.application_categories_selected_id = Some("browsers".to_owned());
+                    app.application_categories_name = "Unsaved category".to_owned();
+                }
+                app.dismiss_application_layouts_dialogs_if_page_inactive();
+                assert_eq!(app.application_picker_open, picker);
+                assert_eq!(app.application_categories_open, !picker);
+
+                app.settings_tab = tab;
+                app.main_menu_tab = menu;
+                let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let ctx = ui.ctx().clone();
+                    app.draw_layout(ui, &layout, &ctx);
+                });
+                assert!(!app.application_picker_open);
+                assert!(!app.application_categories_open);
+                assert!(app.application_picker_target_layout_id.is_none());
+                assert!(app.application_picker_name.is_empty());
+                assert!(app.application_categories_selected_id.is_none());
+                assert!(app.application_categories_name.is_empty());
+
+                app.open_application_layouts_page();
+                let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let ctx = ui.ctx().clone();
+                    app.draw_layout(ui, &layout, &ctx);
+                });
+                assert!(!app.application_picker_open);
+                assert!(!app.application_categories_open);
+            }
+        }
+    }
+
     fn vial_app(locked: bool) -> EntropyApp {
         let ctx = egui::Context::default();
         let creation_context = eframe::CreationContext::_new_kittest(ctx);

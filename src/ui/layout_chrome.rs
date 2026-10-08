@@ -70,6 +70,7 @@ impl EntropyApp {
                     );
                 });
             }
+            self.dismiss_application_layouts_dialogs_if_page_inactive();
             if matches!(
                 self.main_menu_tab,
                 MainMenuTab::Settings | MainMenuTab::Advanced

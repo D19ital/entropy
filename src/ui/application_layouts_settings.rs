@@ -159,6 +159,36 @@ fn application_picker_content_ui<R>(
 }
 
 impl EntropyApp {
+    fn close_application_picker_dialog(&mut self) {
+        self.application_picker_open = false;
+        self.application_picker_selected = None;
+        self.application_picker_target_layout_id = None;
+        self.application_picker_name.clear();
+        self.application_picker_search.clear();
+        self.application_picker_category_changed = false;
+        self.application_picker_custom_category_id = None;
+    }
+
+    fn close_application_categories_dialog(&mut self) {
+        self.application_categories_open = false;
+        self.application_categories_selected_id = None;
+        self.application_categories_name.clear();
+    }
+
+    pub(super) fn dismiss_application_layouts_dialogs_if_page_inactive(&mut self) {
+        if self.main_menu_tab == MainMenuTab::Advanced
+            && self.settings_tab == SettingsTab::ApplicationLayouts
+        {
+            return;
+        }
+        if self.application_picker_open {
+            self.close_application_picker_dialog();
+        }
+        if self.application_categories_open {
+            self.close_application_categories_dialog();
+        }
+    }
+
     pub(super) fn draw_application_layouts_settings_page(
         &mut self,
         ui: &mut egui::Ui,
@@ -437,7 +467,7 @@ impl EntropyApp {
         if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
             || !open
         {
-            self.application_categories_open = false;
+            self.close_application_categories_dialog();
         }
     }
 
@@ -1612,13 +1642,10 @@ impl EntropyApp {
             open = false;
         }
         if !open {
-            self.application_picker_selected = None;
-            self.application_picker_target_layout_id = None;
-            self.application_picker_name.clear();
-            self.application_picker_category_changed = false;
-            self.application_picker_custom_category_id = None;
+            self.close_application_picker_dialog();
+        } else {
+            self.application_picker_open = true;
         }
-        self.application_picker_open = open;
     }
 
     fn apply_picker_selection(
