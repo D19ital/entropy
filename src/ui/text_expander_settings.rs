@@ -1,6 +1,17 @@
 use super::*;
 
 impl EntropyApp {
+    pub(super) fn dismiss_text_expander_rule_editor_if_page_inactive(&mut self) {
+        if self.text_expander_rule_editor.is_some()
+            && (self.main_menu_tab != MainMenuTab::Advanced
+                || self.settings_tab != SettingsTab::TextExpander)
+        {
+            self.flush_pending_text_expander_settings();
+            self.text_expander_rule_editor = None;
+            self.text_expander_rule_editor_focus_pending = false;
+        }
+    }
+
     pub(super) fn draw_text_expander_settings_page(
         &mut self,
         ui: &mut egui::Ui,
@@ -131,6 +142,96 @@ impl EntropyApp {
                 });
             });
         });
+        self.draw_text_expander_rule_editor(ui.ctx(), metrics);
+    }
+
+    fn draw_text_expander_rule_editor(
+        &mut self,
+        ctx: &egui::Context,
+        metrics: crate::ui_style::ResponsiveMetrics,
+    ) {
+        let Some((idx, focus_field)) = self.text_expander_rule_editor else {
+            return;
+        };
+        let Some(original) = self.app_settings.text_expansion_rules.get(idx).cloned() else {
+            self.text_expander_rule_editor = None;
+            return;
+        };
+        let mut rule = original.clone();
+        let focus_pending = std::mem::take(&mut self.text_expander_rule_editor_focus_pending);
+        let lang = self.app_settings.language;
+        let viewport = ctx.content_rect().size();
+        let size = metrics.size(520.0, 370.0).min(viewport - Vec2::splat(32.0));
+        let width = (size.x - metrics.value(42.0)).max(metrics.value(220.0));
+        let replacement_height = (size.y - metrics.value(152.0)).max(metrics.value(100.0));
+        let mut open = true;
+        let mut done = false;
+        crate::ui_style::centered_modal_window(
+            ctx,
+            crate::i18n::tr_catalog(lang, "text_expander.rule_editor_title"),
+            egui::Id::new("text_expander_rule_editor"),
+            &mut open,
+            size,
+        )
+        .movable(false)
+        .show(ctx, |ui| {
+            ui.set_width(width);
+            ui.label(crate::i18n::tr_catalog(lang, "text_expander.trigger_label"));
+            ui.add_space(metrics.value(4.0));
+            let trigger = crate::ui_style::modern_text_field_sized(
+                ui,
+                ui.make_persistent_id(("text_expander_trigger", idx)),
+                &mut rule.trigger,
+                width,
+                metrics.settings_control_height(),
+                crate::i18n::tr_catalog(lang, "text_expander.trigger_hint"),
+                32,
+                egui::Align::Min,
+            );
+            if focus_pending && focus_field == TextExpanderRuleField::Trigger {
+                trigger.request_focus();
+            }
+            ui.add_space(metrics.value(12.0));
+            ui.label(crate::i18n::tr_catalog(
+                lang,
+                "text_expander.replacement_label",
+            ));
+            ui.add_space(metrics.value(4.0));
+            let replacement = crate::ui_style::modern_multiline_text_field_sized(
+                ui,
+                ui.make_persistent_id(("text_expander_replacement", idx)),
+                &mut rule.replacement,
+                egui::vec2(width, replacement_height),
+                crate::i18n::tr_catalog(lang, "text_expander.replacement_hint"),
+                480,
+            );
+            if focus_pending && focus_field == TextExpanderRuleField::Replacement {
+                replacement.request_focus();
+            }
+            ui.add_space(metrics.value(14.0));
+            ui.vertical_centered(|ui| {
+                done = crate::ui_style::modern_button(
+                    ui,
+                    crate::i18n::tr_catalog(lang, "text_expander.rule_editor_done"),
+                    metrics.size(108.0, 32.0),
+                    true,
+                )
+                .clicked();
+            });
+        });
+
+        if rule != original {
+            self.app_settings.text_expansion_rules[idx] = rule;
+            self.queue_text_expander_settings_save(ctx.input(|input| input.time));
+        }
+        let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
+        if !open || done || escape {
+            if escape {
+                ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            }
+            self.flush_pending_text_expander_settings();
+            self.text_expander_rule_editor = None;
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -387,5 +488,169 @@ mod ibus_action_tests {
                 assert_ne!(crate::i18n::tr_catalog(language, key), key);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod rule_editor_tests {
+    use super::*;
+
+    #[test]
+    fn clicking_either_rule_preview_opens_the_same_editor() {
+        for (x, field) in [
+            (190.0, TextExpanderRuleField::Trigger),
+            (285.0, TextExpanderRuleField::Replacement),
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = EntropyApp::new_inert_for_test();
+            app.app_settings
+                .text_expansion_rules
+                .push(crate::text_expander::TextExpansionRule::default());
+            let pos = egui::pos2(x, 27.0);
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 420.0));
+            let frame = |app: &mut EntropyApp, events| {
+                let _ = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(screen),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
+                        let first_rule_row = if cfg!(target_os = "windows") { 4 } else { 5 };
+                        app.draw_text_expander_editor_content(
+                            ui,
+                            first_rule_row..first_rule_row + 1,
+                            452.0,
+                            54.0,
+                            metrics,
+                            false,
+                        );
+                    },
+                );
+            };
+            frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(
+                    &mut app,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            assert_eq!(app.text_expander_rule_editor, Some((0, field)));
+            assert!(app.text_expander_rule_editor_focus_pending);
+        }
+    }
+
+    #[test]
+    fn expanded_rule_editor_fits_small_window_and_closes_with_escape() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        app.app_settings
+            .text_expansion_rules
+            .push(crate::text_expander::TextExpansionRule::default());
+        app.text_expander_rule_editor = Some((0, TextExpanderRuleField::Replacement));
+        app.text_expander_rule_editor_focus_pending = true;
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 480.0));
+        let frame = |app: &mut EntropyApp, events| {
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
+                    app.draw_text_expander_rule_editor(ui.ctx(), metrics);
+                },
+            );
+        };
+        frame(&mut app, vec![]);
+        let rect = ctx
+            .memory(|memory| memory.area_rect(egui::Id::new("text_expander_rule_editor")))
+            .expect("rule editor is visible");
+        assert!(screen.contains_rect(rect), "modal exceeds screen: {rect:?}");
+        assert!(rect.width() >= 400.0 && rect.height() >= 300.0);
+        frame(
+            &mut app,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(app.text_expander_rule_editor.is_none());
+    }
+
+    #[test]
+    fn expanded_replacement_accepts_multiline_text_in_the_rule_model() {
+        let ctx = egui::Context::default();
+        let mut app = EntropyApp::new_inert_for_test();
+        app.app_settings
+            .text_expansion_rules
+            .push(crate::text_expander::TextExpansionRule::default());
+        app.text_expander_rule_editor = Some((0, TextExpanderRuleField::Replacement));
+        app.text_expander_rule_editor_focus_pending = true;
+        let frame = |app: &mut EntropyApp, events| {
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
+                    app.draw_text_expander_rule_editor(ui.ctx(), metrics);
+                },
+            );
+        };
+        frame(&mut app, vec![]);
+        frame(&mut app, vec![egui::Event::Text("First".into())]);
+        frame(
+            &mut app,
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        frame(&mut app, vec![egui::Event::Text("Second".into())]);
+        assert_eq!(
+            app.app_settings.text_expansion_rules[0].replacement,
+            "First\nSecond"
+        );
+        assert!(app.text_expander_settings_save_pending);
+    }
+
+    #[test]
+    fn leaving_text_expander_dismisses_editor_without_changing_rule() {
+        let mut app = EntropyApp::new_inert_for_test();
+        app.app_settings
+            .text_expansion_rules
+            .push(crate::text_expander::TextExpansionRule::default());
+        let rule = app.app_settings.text_expansion_rules[0].clone();
+        app.main_menu_tab = MainMenuTab::Advanced;
+        app.settings_tab = SettingsTab::TextExpander;
+        app.text_expander_rule_editor = Some((0, TextExpanderRuleField::Trigger));
+        app.dismiss_text_expander_rule_editor_if_page_inactive();
+        assert!(app.text_expander_rule_editor.is_some());
+        app.settings_tab = SettingsTab::TypingTrainer;
+        app.dismiss_text_expander_rule_editor_if_page_inactive();
+        assert!(app.text_expander_rule_editor.is_none());
+        assert_eq!(app.app_settings.text_expansion_rules[0], rule);
     }
 }

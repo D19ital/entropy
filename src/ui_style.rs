@@ -583,6 +583,76 @@ pub fn modern_text_field_sized(
     )
 }
 
+/// A compact field-shaped entry point for editing longer text in a separate window.
+pub fn modern_text_field_preview_button(
+    ui: &mut Ui,
+    id: egui::Id,
+    text: &str,
+    hint: &str,
+    size: Vec2,
+) -> egui::Response {
+    let rect = paint_modern_text_field_frame(ui, id, size.x, size.y, true);
+    let response = ui.interact(rect, id, Sense::click());
+    let clip = rect.shrink2(Vec2::new(10.0, 2.0));
+    let display = if text.is_empty() {
+        hint.to_owned()
+    } else {
+        text.replace('\n', " ↵ ")
+    };
+    let color = if text.is_empty() {
+        muted_text(ui.visuals().dark_mode)
+    } else {
+        ui.visuals().text_color()
+    };
+    ui.painter().with_clip_rect(clip).text(
+        egui::pos2(clip.left(), clip.center().y),
+        egui::Align2::LEFT_CENTER,
+        display,
+        FontId::proportional(12.5),
+        color,
+    );
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
+}
+
+pub fn modern_multiline_text_field_sized(
+    ui: &mut Ui,
+    id: egui::Id,
+    text: &mut String,
+    size: Vec2,
+    hint: &str,
+    char_limit: usize,
+) -> egui::Response {
+    let rect = paint_modern_text_field_frame(ui, id, size.x, size.y, true);
+    let inner_size = (size - Vec2::new(20.0, 20.0)).max(Vec2::new(1.0, 1.0));
+    let response = allocate_ui_at_rect(ui, rect.shrink2(Vec2::splat(10.0)), |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt(id.with("scroll"))
+            .max_height(inner_size.y)
+            .show(ui, |ui| {
+                ui.add_sized(
+                    inner_size,
+                    egui::TextEdit::multiline(text)
+                        .id(id)
+                        .desired_width(inner_size.x)
+                        .min_size(inner_size)
+                        .hint_text(hint)
+                        .font(FontId::proportional(13.0))
+                        .char_limit(char_limit)
+                        .frame(egui::Frame::NONE),
+                )
+            })
+            .inner
+    })
+    .inner;
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+    }
+    response
+}
+
 pub fn modern_text_field_interactive(
     ui: &mut Ui,
     id: egui::Id,

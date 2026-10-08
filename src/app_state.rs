@@ -3288,6 +3288,12 @@ pub(crate) enum ComboPickField {
     Output,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum TextExpanderRuleField {
+    Trigger,
+    Replacement,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingsTab {
     AppSettings,
@@ -5376,6 +5382,8 @@ pub struct EntropyApp {
     pub(crate) key_override_visible_count: usize,
     pub(crate) key_override_undo_stack: Vec<(Vec<KeyOverrideEntry>, Vec<String>, usize, usize)>,
     pub(crate) text_expander_deleted_rules: Vec<(usize, crate::text_expander::TextExpansionRule)>,
+    pub(crate) text_expander_rule_editor: Option<(usize, TextExpanderRuleField)>,
+    pub(crate) text_expander_rule_editor_focus_pending: bool,
     pub(crate) text_expander_emoji_search: String,
     pub(crate) text_expander_emoji_group: usize,
     pub(crate) text_expander_emoji_target: Option<(usize, usize, usize)>,

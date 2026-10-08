@@ -269,6 +269,8 @@ impl EntropyApp {
             key_override_visible_count: 1,
             key_override_undo_stack: Vec::new(),
             text_expander_deleted_rules: Vec::new(),
+            text_expander_rule_editor: None,
+            text_expander_rule_editor_focus_pending: false,
             text_expander_emoji_search: String::new(),
             text_expander_emoji_group: 0,
             text_expander_emoji_target: None,

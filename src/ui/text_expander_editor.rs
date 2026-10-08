@@ -988,6 +988,7 @@ impl EntropyApp {
             };
             let mut rule = original_rule.clone();
             let mut delete_rule = false;
+            let mut edit_rule = None;
             let mut changed = false;
             let mut should_flush_save = false;
             let issue = self.text_expander_rule_issue(idx, &rule);
@@ -1066,61 +1067,42 @@ impl EntropyApp {
                         changed = true;
                     }
 
-                    let mut trigger_resp = None;
                     crate::ui_style::allocate_ui_at_rect(ui, trigger_rect, |ui| {
-                        trigger_resp = Some(
-                            crate::ui_style::modern_text_field_sized(
-                                ui,
-                                ui.make_persistent_id(("text_expander_trigger", idx)),
-                                &mut rule.trigger,
-                                trigger_width,
-                                field_height,
-                                crate::i18n::tr_catalog(lang, "text_expander.trigger_hint"),
-                                32,
-                                egui::Align::Center,
-                            )
-                            .on_hover_text(crate::i18n::tr_catalog(
-                                lang,
-                                "text_expander.trigger_tooltip",
-                            )),
-                        );
+                        if crate::ui_style::modern_text_field_preview_button(
+                            ui,
+                            ui.make_persistent_id(("text_expander_trigger_preview", idx)),
+                            &rule.trigger,
+                            crate::i18n::tr_catalog(lang, "text_expander.trigger_hint"),
+                            trigger_rect.size(),
+                        )
+                        .on_hover_text(crate::i18n::tr_catalog(
+                            lang,
+                            "text_expander.trigger_tooltip",
+                        ))
+                        .clicked()
+                        {
+                            edit_rule = Some(TextExpanderRuleField::Trigger);
+                        }
                     });
-                    if let Some(resp) = trigger_resp {
-                        if resp.changed() {
-                            changed = true;
-                        }
-                        if resp.lost_focus() {
-                            should_flush_save = true;
-                        }
-                    }
 
                     let replacement_id = ui.make_persistent_id(("text_expander_replacement", idx));
-                    let mut replacement_resp = None;
                     crate::ui_style::allocate_ui_at_rect(ui, replacement_rect, |ui| {
-                        replacement_resp = Some(
-                            super::text_expander_emoji::color_emoji_text_field(
-                                ui,
-                                replacement_id,
-                                &mut rule.replacement,
-                                replacement_width,
-                                field_height,
-                                crate::i18n::tr_catalog(lang, "text_expander.replacement_hint"),
-                                480,
-                            )
-                            .on_hover_text(crate::i18n::tr_catalog(
-                                lang,
-                                "text_expander.replacement_tooltip",
-                            )),
-                        );
+                        if crate::ui_style::modern_text_field_preview_button(
+                            ui,
+                            ui.make_persistent_id(("text_expander_replacement_preview", idx)),
+                            &rule.replacement,
+                            crate::i18n::tr_catalog(lang, "text_expander.replacement_hint"),
+                            replacement_rect.size(),
+                        )
+                        .on_hover_text(crate::i18n::tr_catalog(
+                            lang,
+                            "text_expander.replacement_tooltip",
+                        ))
+                        .clicked()
+                        {
+                            edit_rule = Some(TextExpanderRuleField::Replacement);
+                        }
                     });
-                    if let Some(resp) = replacement_resp {
-                        if resp.changed() {
-                            changed = true;
-                        }
-                        if resp.lost_focus() {
-                            should_flush_save = true;
-                        }
-                    }
 
                     let popup_id = ui.make_persistent_id(("text_expander_emoji_popup", idx));
                     let mut emoji_resp = None;
@@ -1207,7 +1189,20 @@ impl EntropyApp {
                 },
             );
 
+            if let Some(field) = edit_rule {
+                self.text_expander_rule_editor = Some((idx, field));
+                self.text_expander_rule_editor_focus_pending = true;
+                egui::Popup::close_all(ui.ctx());
+            }
+
             if delete_rule {
+                if let Some((open_idx, field)) = self.text_expander_rule_editor {
+                    if open_idx == idx {
+                        self.text_expander_rule_editor = None;
+                    } else if open_idx > idx {
+                        self.text_expander_rule_editor = Some((open_idx - 1, field));
+                    }
+                }
                 let removed_rule = self.app_settings.text_expansion_rules.remove(idx);
                 self.text_expander_deleted_rules.push((idx, removed_rule));
                 self.save_text_expander_settings();
