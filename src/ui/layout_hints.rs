@@ -521,4 +521,22 @@ mod tests {
             &["key_hints.change_key", CLEAR_KEY]
         );
     }
+
+    #[test]
+    fn visibility_edit_hint_mentions_only_keys_in_both_languages() {
+        assert_eq!(
+            crate::i18n::tr_catalog(
+                crate::i18n::Language::English,
+                "key_hints.show_hide_keys_click",
+            ),
+            "Left click a key to show or hide it",
+        );
+        assert_eq!(
+            crate::i18n::tr_catalog(
+                crate::i18n::Language::Russian,
+                "key_hints.show_hide_keys_click",
+            ),
+            "ЛКМ по клавише — показать или скрыть",
+        );
+    }
 }
