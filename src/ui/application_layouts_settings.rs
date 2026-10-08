@@ -15,6 +15,7 @@ struct ControlPairGeometry {
 }
 
 const APPLICATION_LAYOUT_CONTROL_GAP: f32 = 8.0;
+const APPLICATION_LAYOUT_APPLICATION_CONTROL_WIDTH: f32 = 320.0;
 fn application_layout_name_is_invalid(
     settings: &crate::application_layouts::DeviceApplicationLayouts,
     target_id: Option<&str>,
@@ -726,7 +727,7 @@ impl EntropyApp {
                     app_layout_text(language, "Приложение", "Application"),
                     !is_default,
                     Some(application_tooltip),
-                    control_width,
+                    metrics.value(APPLICATION_LAYOUT_APPLICATION_CONTROL_WIDTH),
                     |ui| {
                         let gap = metrics.value(APPLICATION_LAYOUT_CONTROL_GAP);
                         let choose_width = metrics.value(82.0);
@@ -2872,6 +2873,64 @@ mod tests {
                 - (container.right() - actions.trailing.right()))
             .abs()
                 <= 0.01
+        );
+    }
+
+    #[test]
+    fn default_application_text_fits_beside_edit_in_russian() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 650.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                for scale in [1.0, 1.12] {
+                    let row_width = 452.0 * scale;
+                    let control_width = APPLICATION_LAYOUT_APPLICATION_CONTROL_WIDTH * scale;
+                    let pair = control_pair_geometry(
+                        egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(control_width, 32.0 * scale),
+                        ),
+                        82.0 * scale,
+                        APPLICATION_LAYOUT_CONTROL_GAP * scale,
+                        32.0 * scale,
+                    );
+                    let text_width = ui
+                        .painter()
+                        .layout_no_wrap(
+                            "Для остальных приложений".to_owned(),
+                            egui::FontId::proportional(12.5),
+                            egui::Color32::WHITE,
+                        )
+                        .size()
+                        .x;
+                    let label_width = ui
+                        .painter()
+                        .layout_no_wrap(
+                            "Приложение".to_owned(),
+                            egui::FontId::proportional(13.0 * scale),
+                            egui::Color32::WHITE,
+                        )
+                        .size()
+                        .x;
+                    assert!(
+                        text_width + 20.0 <= pair.leading.width(),
+                        "scale={scale}: text={text_width}, input={}",
+                        pair.leading.width()
+                    );
+                    assert!(
+                        label_width + 12.0 <= row_width - control_width,
+                        "scale={scale}: label={label_width}, available={}",
+                        row_width - control_width
+                    );
+                    assert!((pair.trailing.right() - control_width).abs() < 0.01);
+                }
+            },
         );
     }
 
