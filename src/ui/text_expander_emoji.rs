@@ -232,7 +232,7 @@ pub(super) fn color_emoji_preview_field(
     height: f32,
     hint: &str,
 ) -> egui::Response {
-    let mut display = text.to_owned();
+    let mut display = text.replace(['\r', '\n'], " ");
     color_emoji_field(ui, id, &mut display, width, height, hint, 480, false)
 }
 
@@ -251,7 +251,11 @@ fn color_emoji_field(
     let text_color = ui.visuals().text_color();
     let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, wrap_width: f32| {
         let mut job = egui::text::LayoutJob::default();
-        job.wrap.max_width = wrap_width;
+        job.wrap.max_width = if interactive {
+            wrap_width
+        } else {
+            f32::INFINITY
+        };
         job.break_on_newline = false;
         job.halign = egui::Align::Min;
 
@@ -523,7 +527,7 @@ mod tests {
     #[test]
     fn long_color_emoji_preview_clicks_without_overflow() {
         let ctx = egui::Context::default();
-        let text = format!("🚀 {}", "text ".repeat(80));
+        let text = format!("🚀\n{}", "text ".repeat(80));
         let rect = std::cell::Cell::new(egui::Rect::NOTHING);
         let was_clicked = std::cell::Cell::new(false);
         let frame = |events, rect: &std::cell::Cell<egui::Rect>| {
@@ -563,6 +567,11 @@ mod tests {
                 if mesh.texture_id != egui::TextureId::default())
                 && shape.clip_rect.right() <= field.right() + 0.1
         }));
+        assert!(output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text)
+                if text.galley.job.text.contains("🚀 text")
+                    && text.galley.rows.len() == 1)
+        }));
 
         let pos = field.center();
         let hovered = frame(vec![egui::Event::PointerMoved(pos)], &rect);
@@ -570,6 +579,10 @@ mod tests {
             hovered.platform_output.cursor_icon,
             egui::CursorIcon::PointingHand
         );
+        assert!(hovered.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Rect(frame)
+                if frame.rect == field && frame.fill == crate::ui_style::hover_fill(true))
+        }));
         frame(
             vec![
                 egui::Event::PointerMoved(pos),

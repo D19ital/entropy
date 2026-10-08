@@ -591,8 +591,8 @@ pub fn modern_text_preview_field_sized(
     height: f32,
     hint: &str,
 ) -> egui::Response {
-    let mut display = text.to_owned();
-    let field_rect = paint_modern_text_field_frame(ui, id, width, height, false);
+    let mut display = text.replace(['\r', '\n'], " ");
+    let field_rect = paint_modern_text_field_frame(ui, id, width, height, true);
     let inner_rect = field_rect.shrink2(Vec2::new(10.0, 0.0));
     allocate_ui_at_rect(ui, inner_rect, |ui| {
         ui.set_clip_rect(ui.clip_rect().intersect(inner_rect));
@@ -733,7 +733,7 @@ pub fn modern_text_field_sized_with_layouter(
     layouter: &mut dyn FnMut(&Ui, &dyn egui::TextBuffer, f32) -> std::sync::Arc<egui::Galley>,
 ) -> egui::widgets::text_edit::TextEditOutput {
     let font_size = 12.5 * (height / 32.0).clamp(1.0, 1.3);
-    let field_rect = paint_modern_text_field_frame(ui, id, width, height, interactive);
+    let field_rect = paint_modern_text_field_frame(ui, id, width, height, true);
     let inner_size = Vec2::new(width - 20.0, height);
     let inner_rect = field_rect.shrink2(Vec2::new(10.0, 0.0));
     let output = allocate_ui_at_rect(ui, inner_rect, |ui| {
@@ -1753,7 +1753,7 @@ mod tests {
     #[test]
     fn long_rule_trigger_preview_is_click_only_and_clipped() {
         let ctx = egui::Context::default();
-        let text = "shortcut".repeat(40);
+        let text = format!("shortcut\n{}", "suffix".repeat(40));
         let rect = std::cell::Cell::new(egui::Rect::NOTHING);
         let clicked = std::cell::Cell::new(false);
         let frame = |events| {
@@ -1786,13 +1786,21 @@ mod tests {
             .iter()
             .filter(|shape| matches!(shape.shape, egui::Shape::Text(_)))
             .all(|shape| shape.clip_rect.right() <= rect.get().right() + 0.1));
+        assert!(output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text)
+                if text.galley.job.text.contains("shortcut suffix")
+                    && text.galley.rows.len() == 1)
+        }));
         let pos = rect.get().center();
+        let hovered = frame(vec![egui::Event::PointerMoved(pos)]);
         assert_eq!(
-            frame(vec![egui::Event::PointerMoved(pos)])
-                .platform_output
-                .cursor_icon,
+            hovered.platform_output.cursor_icon,
             egui::CursorIcon::PointingHand
         );
+        assert!(hovered.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Rect(frame)
+                if frame.rect == rect.get() && frame.fill == hover_fill(true))
+        }));
         frame(vec![egui::Event::PointerButton {
             pos,
             button: egui::PointerButton::Primary,
@@ -1806,7 +1814,7 @@ mod tests {
             modifiers: Default::default(),
         }]);
         assert!(clicked.get());
-        assert_eq!(text, "shortcut".repeat(40));
+        assert!(text.contains('\n'));
     }
 
     #[test]
