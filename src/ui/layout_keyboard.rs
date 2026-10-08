@@ -9,9 +9,9 @@ fn encoder_section_rects(
 ) -> (egui::Rect, Option<egui::Rect>, egui::Rect) {
     let center_y = circle_bounds.center().y;
     if has_press_button {
-        // Give the press action a third of the dial. Use the interaction radius so
+        // Give the press action just over a quarter of the dial. Use the interaction radius so
         // its clickable area and painted dividers agree even on hover enlargement.
-        let half_band = interactive_radius * 0.34;
+        let half_band = interactive_radius * 0.27;
         let top_divider_y = center_y - half_band;
         let bottom_divider_y = center_y + half_band;
         (
@@ -42,7 +42,7 @@ mod encoder_section_tests {
     use super::*;
 
     #[test]
-    fn press_section_occupies_center_third_without_changing_outer_bounds() {
+    fn press_section_occupies_center_band_without_changing_outer_bounds() {
         for radius in [70.0, 105.0] {
             let bounds = egui::Rect::from_center_size(
                 egui::pos2(200.0, 150.0),
@@ -54,7 +54,7 @@ mod encoder_section_tests {
             assert_eq!(top.bottom(), middle.top());
             assert_eq!(middle.bottom(), bottom.top());
             assert_eq!(bottom.bottom(), bounds.bottom());
-            assert!((middle.height() / bounds.height() - 0.34).abs() < 0.001);
+            assert!((middle.height() / bounds.height() - 0.27).abs() < 0.001);
             assert_eq!(middle.center(), bounds.center());
             let (top, middle, bottom) = encoder_section_rects(bounds, radius, false);
             assert!(middle.is_none());
