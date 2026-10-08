@@ -664,6 +664,21 @@ impl DeviceApplicationLayouts {
             }
             changed |= layout.normalize();
         }
+        // Older X11 builds could expose their launch name as WM_CLASS, so a
+        // profile for Entropy may have been saved with the misleading name Vial.
+        // Keep the real Vial application and any other user-named profile intact.
+        if !self.layout_name_exists("Entropy", None) {
+            let legacy_entropy = self
+                .layouts
+                .values()
+                .find(|layout| {
+                    layout.name == "Vial" && normalize_executable(&layout.executable) == "entropy"
+                })
+                .map(|layout| layout.id.clone());
+            if let Some(id) = legacy_entropy {
+                changed |= self.rename_layout(&id, "Entropy");
+            }
+        }
         let next_unused_id = self
             .layouts
             .keys()
@@ -3325,6 +3340,35 @@ mod tests {
         let replacement = app("chromium", "Chromium");
         assert!(settings.update_application_rule(&id, &replacement, "Web", ""));
         assert!(!settings.pending_builtin_auto_bind.contains_key(&id));
+    }
+
+    #[test]
+    fn normalize_renames_legacy_vial_label_only_for_entropy_executable() {
+        let mut settings = DeviceApplicationLayouts::default();
+        let entropy =
+            settings.create_for_application_named(&app("entropy", "Vial"), Some("Vial"), "");
+        let vial =
+            settings.create_for_application_named(&app("vial", "Vial GUI"), Some("Vial GUI"), "");
+        settings.active_layout_id = entropy.clone();
+        let before = settings.layouts[&entropy].clone();
+
+        assert!(settings.normalize());
+        let renamed = &settings.layouts[&entropy];
+        assert_eq!(renamed.name, "Entropy");
+        assert_eq!(renamed.executable, before.executable);
+        assert_eq!(renamed.layers, before.layers);
+        assert_eq!(renamed.layer_names, before.layer_names);
+        assert!(renamed.revision > before.revision);
+        assert_eq!(settings.active_layout_id, entropy);
+        assert_eq!(settings.layouts[&vial].name, "Vial GUI");
+
+        assert!(!settings.normalize());
+
+        let mut unrelated = DeviceApplicationLayouts::default();
+        let vial_id =
+            unrelated.create_for_application_named(&app("vial", "Vial"), Some("Vial"), "");
+        unrelated.normalize();
+        assert_eq!(unrelated.layouts[&vial_id].name, "Vial");
     }
 
     #[test]
