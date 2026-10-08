@@ -965,9 +965,44 @@ pub fn modern_dropdown_grouped_options(
     min_width: f32,
     font_size: f32,
 ) -> Option<String> {
+    modern_dropdown_grouped_options_with_action(
+        ui,
+        id,
+        trigger,
+        default,
+        groups,
+        selected_id,
+        min_width,
+        font_size,
+        None,
+    )
+    .and_then(|choice| match choice {
+        GroupedDropdownChoice::Item(id) => Some(id),
+        GroupedDropdownChoice::Action => None,
+    })
+}
+
+pub enum GroupedDropdownChoice {
+    Item(String),
+    Action,
+}
+
+/// Grouped menu with an optional fixed action below the category rows.
+pub fn modern_dropdown_grouped_options_with_action(
+    ui: &mut Ui,
+    id: egui::Id,
+    trigger: &egui::Response,
+    default: &(String, String),
+    groups: &[(String, Vec<(String, String)>)],
+    selected_id: &str,
+    min_width: f32,
+    font_size: f32,
+    action_label: Option<&str>,
+) -> Option<GroupedDropdownChoice> {
     let font = FontId::proportional(font_size);
     let max_label = std::iter::once(default.1.as_str())
         .chain(groups.iter().map(|group| group.0.as_str()))
+        .chain(action_label)
         .map(|label| {
             ui.painter()
                 .layout_no_wrap(label.to_owned(), font.clone(), ui.visuals().text_color())
@@ -1004,7 +1039,7 @@ pub fn modern_dropdown_grouped_options(
                 false,
             );
             if default_response.clicked() {
-                picked = Some(default.0.clone());
+                picked = Some(GroupedDropdownChoice::Item(default.0.clone()));
                 egui::Popup::close_all(ui.ctx());
             }
             let previous = ui.ctx().data(|d| d.get_temp::<usize>(active_id));
@@ -1072,7 +1107,7 @@ pub fn modern_dropdown_grouped_options(
                                         false,
                                     );
                                     if response.clicked() {
-                                        picked = Some(item_id.clone());
+                                        picked = Some(GroupedDropdownChoice::Item(item_id.clone()));
                                         egui::Popup::close_all(ui.ctx());
                                     }
                                 }
@@ -1090,6 +1125,13 @@ pub fn modern_dropdown_grouped_options(
                     d.remove::<usize>(active_id);
                     d.remove::<egui::Rect>(child_id);
                 });
+            }
+            if let Some(label) = action_label {
+                ui.separator();
+                if modern_dropdown_option_row(ui, label, width, &font, false, false).clicked() {
+                    picked = Some(GroupedDropdownChoice::Action);
+                    egui::Popup::close_all(ui.ctx());
+                }
             }
         },
     );

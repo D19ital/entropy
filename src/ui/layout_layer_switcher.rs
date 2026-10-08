@@ -1,3 +1,4 @@
+use super::application_layout_runtime::app_layout_text;
 use super::*;
 
 pub(super) const MAIN_MENU_BATTERY_RESERVED_H: f32 = 34.0;
@@ -117,6 +118,12 @@ impl EntropyApp {
         );
         let dropdown_id = ui.make_persistent_id("layout_page_application_selector");
         let response = ui.allocate_rect(selector_rect, Sense::click());
+        let language = self.app_settings.language;
+        response.clone().on_hover_text(app_layout_text(
+            language,
+            "Выбрать раскладку приложения или открыть настройки Автослоя",
+            "Choose an application layout or open Autolayer settings",
+        ));
         if response.clicked() {
             egui::Popup::toggle_id(ui.ctx(), dropdown_id);
         }
@@ -149,13 +156,12 @@ impl EntropyApp {
             arrow_color,
         );
 
-        let language = self.app_settings.language;
         let groups = if egui::Popup::is_id_open(ui.ctx(), dropdown_id) {
             self.application_layout_editor_labeled_groups(&options, language)
         } else {
             Vec::new()
         };
-        if let Some(id) = crate::ui_style::modern_dropdown_grouped_options(
+        match crate::ui_style::modern_dropdown_grouped_options_with_action(
             ui,
             dropdown_id,
             &response,
@@ -164,8 +170,15 @@ impl EntropyApp {
             &current_id,
             selector_width,
             12.5,
+            Some(app_layout_text(language, "Настроить", "Configure")),
         ) {
-            self.activate_application_layout(&id);
+            Some(crate::ui_style::GroupedDropdownChoice::Item(id)) => {
+                self.activate_application_layout(&id);
+            }
+            Some(crate::ui_style::GroupedDropdownChoice::Action) => {
+                self.open_application_layouts_page();
+            }
+            None => {}
         }
     }
 
@@ -546,11 +559,15 @@ impl EntropyApp {
 
 #[cfg(test)]
 mod tests {
-    use crate::app::{DeferredDeviceLoadState, DeferredLoadStatus, DeviceAboutInfo, EntropyApp};
+    use crate::app::{
+        DeferredDeviceLoadState, DeferredLoadStatus, DeviceAboutInfo, EntropyApp, MainMenuTab,
+        SettingsTab,
+    };
 
     use super::{
-        layer_after_wheel, layer_name_edit_is_available, layer_name_hover_is_available,
-        main_menu_battery_status, main_menu_reserves_battery_status_space, MainMenuBatteryStatus,
+        app_layout_text, layer_after_wheel, layer_name_edit_is_available,
+        layer_name_hover_is_available, main_menu_battery_status,
+        main_menu_reserves_battery_status_space, MainMenuBatteryStatus,
     };
 
     #[test]
@@ -982,6 +999,105 @@ mod tests {
                 .name,
             "Application 0"
         );
+
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(selector_center),
+                    egui::Event::PointerButton {
+                        pos: selector_center,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        let (_, popup) = frame(&mut app, vec![]);
+        let configure_label = app_layout_text(app.app_settings.language, "Настроить", "Configure");
+        let label_center = |label: &str| {
+            popup
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.visual_bounding_rect().center())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing {label}"))
+        };
+        let configure = label_center(configure_label);
+        assert!(configure.y > label_center("Default").y);
+        assert!(
+            configure.y
+                > label_center(app_layout_text(
+                    app.app_settings.language,
+                    "Другие",
+                    "Other",
+                ))
+                .y
+        );
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(configure),
+                    egui::Event::PointerButton {
+                        pos: configure,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert!(app.settings_tab == SettingsTab::ApplicationLayouts);
+        assert!(app.main_menu_tab == MainMenuTab::Advanced);
+        assert!(!app.application_layout_editor_active);
+        assert_eq!(
+            app.application_layout_settings()
+                .unwrap()
+                .active_layout()
+                .unwrap()
+                .name,
+            "Application 0",
+        );
+    }
+
+    #[test]
+    fn application_selector_hover_explains_settings_entry() {
+        let ctx = egui::Context::default();
+        ctx.style_mut(|style| style.interaction.tooltip_delay = 0.0);
+        let mut app = EntropyApp::new_inert_for_test();
+        app.app_settings.language = crate::i18n::Language::English;
+        app.app_settings.application_layouts.insert(
+            "offline-macropad".to_owned(),
+            crate::application_layouts::DeviceApplicationLayouts::default(),
+        );
+        app.app_settings.last_application_layout_device_key = Some("offline-macropad".to_owned());
+        let selector = egui::pos2(450.0, 130.0);
+        let mut output = None;
+        for time in [0.0, 1.0, 2.0] {
+            output = Some(ctx.run_ui(
+                egui::RawInput {
+                    time: Some(time),
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 650.0),
+                    )),
+                    events: vec![egui::Event::PointerMoved(selector)],
+                    ..Default::default()
+                },
+                |ui| app.draw_application_layout_switcher(ui, selector.x, selector.y),
+            ));
+        }
+        let output = output.unwrap();
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text)
+                if text.galley.text() == "Choose an application layout or open Autolayer settings"
+        )));
     }
 
     #[test]
