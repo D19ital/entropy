@@ -946,6 +946,7 @@ impl EntropyApp {
                             encoder_count,
                         ),
                         self.hide_modular_encoders_by_default(layout),
+                        self.encoder_only_module_settings(layout),
                     );
                     let layout = layout.clone();
                     self.migrate_fixed_encoder_visibility_to_layout(&layout);

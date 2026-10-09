@@ -1367,6 +1367,7 @@ mod tests {
                 Some(0),
                 None,
                 app.hide_modular_encoders_by_default(&layout),
+                app.encoder_only_module_settings(&layout),
             ),
             vec![true, true]
         );

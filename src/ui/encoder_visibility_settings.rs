@@ -20,18 +20,31 @@ pub(super) enum EncoderSettingsRow {
     Field(usize, usize),
 }
 
-// Keep existing hidden choices while moving their control to the local
-// layout editor. Clearing the legacy switches makes the migration one-shot.
-fn migrate_hidden_encoders(legacy: &mut [bool], local: &mut LayoutElementVisibility) -> bool {
-    let mut migrated = false;
-    for (index, visible) in legacy.iter_mut().enumerate() {
-        if !*visible {
-            local.hidden_encoders.insert(index as u8);
-            *visible = true;
-            migrated = true;
+// The legacy file is model-wide. Keep it unchanged so every serial can
+// inherit the same default; the per-device marker makes imports one-shot.
+fn migrate_hidden_encoders(
+    app_settings: &mut AppSettings,
+    device_key: &str,
+    legacy: &mut [bool],
+) -> bool {
+    let first_import = app_settings
+        .migrated_fixed_encoder_visibility
+        .insert(device_key.to_owned());
+    if first_import {
+        let local = app_settings
+            .layout_element_visibility
+            .entry(device_key.to_owned())
+            .or_default();
+        for (index, visible) in legacy.iter().enumerate() {
+            if !visible {
+                local.hidden_encoders.insert(index as u8);
+            }
         }
     }
-    migrated
+    // Only in memory: a second device of this model still needs the saved
+    // legacy vector to inherit its hidden choices.
+    legacy.fill(true);
+    first_import
 }
 
 fn encoder_visibility_side(layout_option: &LayoutOption) -> Option<EncoderVisibilitySide> {
@@ -192,6 +205,7 @@ impl EntropyApp {
         packed: Option<u32>,
         saved: Option<Vec<bool>>,
         hidden_by_default: bool,
+        shared_controls_available: bool,
     ) -> Vec<bool> {
         let encoder_count = layout.encoder_count();
         if encoder_count == 0 {
@@ -208,32 +222,25 @@ impl EntropyApp {
         // reapply it after migrating the old choice into local visibility.
         let fixed_model =
             fixed_encoder_side_size(layout).is_some_and(|side_size| encoder_count == side_size * 2);
-        if !fixed_model && (has_saved_choice || !hidden_by_default) {
+        if !(fixed_model && shared_controls_available) && (has_saved_choice || !hidden_by_default) {
             Self::apply_encoder_layout_options_to_visibility(layout, packed, &mut visibility);
         }
         visibility
     }
 
     pub(super) fn migrate_fixed_encoder_visibility_to_layout(&mut self, layout: &KeyboardLayout) {
-        if !self.encoder_only_module_settings(layout)
-            || self.encoder_visibility.iter().all(|visible| *visible)
-        {
+        if !self.encoder_only_module_settings(layout) {
             return;
         }
         let Some(device_key) = self.layout_element_visibility_device_key() else {
             return;
         };
-        let local = self
-            .app_settings
-            .layout_element_visibility
-            .entry(device_key)
-            .or_default();
-        if migrate_hidden_encoders(&mut self.encoder_visibility, local) {
+        if migrate_hidden_encoders(
+            &mut self.app_settings,
+            &device_key,
+            &mut self.encoder_visibility,
+        ) {
             save_app_settings(&self.app_settings);
-            let device_id = self.encoder_visibility_device_id();
-            if !device_id.is_empty() {
-                save_encoder_visibility(&self.encoder_visibility, &device_id);
-            }
         }
     }
 
@@ -514,7 +521,7 @@ mod tests {
     fn modular_encoder_defaults_to_hidden_until_user_choice_exists() {
         let layout = layout_with_encoder_hide_option();
         assert_eq!(
-            EntropyApp::resolve_initial_encoder_visibility(&layout, Some(0), None, true),
+            EntropyApp::resolve_initial_encoder_visibility(&layout, Some(0), None, true, false),
             vec![false]
         );
     }
@@ -523,7 +530,7 @@ mod tests {
     fn separate_encoder_settings_keep_visible_default() {
         let layout = layout_with_encoder_hide_option();
         assert_eq!(
-            EntropyApp::resolve_initial_encoder_visibility(&layout, Some(0), None, false),
+            EntropyApp::resolve_initial_encoder_visibility(&layout, Some(0), None, false, false),
             vec![true]
         );
     }
@@ -537,54 +544,125 @@ mod tests {
                 Some(0),
                 Some(vec![true]),
                 true,
+                false,
             ),
             vec![true]
         );
     }
 
+    fn fixed_test_layout(side_size: usize, name: &str) -> KeyboardLayout {
+        let mut layout = layout_with_encoder_hide_option();
+        layout.name = name.to_owned();
+        layout.encoders = (0..side_size * 2)
+            .map(|idx| PhysicalEncoder {
+                encoder_idx: idx as u8,
+                ..layout.encoders[0].clone()
+            })
+            .collect();
+        layout
+    }
+
     #[test]
-    fn legacy_fixed_encoder_hiding_moves_to_layout_once() {
+    fn old_fixed_firmware_without_saved_visibility_preserves_hide_option() {
         for (side_size, name) in [(3, "Ergohaven K:03"), (1, "Ergohaven Imperial44")] {
-            let mut layout = layout_with_encoder_hide_option();
-            layout.name = name.to_owned();
-            layout.encoders = (0..side_size * 2)
-                .map(|idx| PhysicalEncoder {
-                    encoder_idx: idx as u8,
-                    ..layout.encoders[0].clone()
-                })
-                .collect();
-            // Firmware's former Hide encoder option must not overwrite the
-            // local visibility saved by a previous Entropy version.
-            let mut legacy = vec![true; side_size * 2];
-            legacy[side_size] = false;
+            let layout = fixed_test_layout(side_size, name);
+            let mut expected = vec![true; side_size * 2];
+            expected[0] = false;
             assert_eq!(
                 EntropyApp::resolve_initial_encoder_visibility(
+                    &layout,
+                    Some(1),
+                    None,
+                    false,
+                    false,
+                ),
+                expected,
+                "{name}: old firmware must honor its Hide encoder bit"
+            );
+            assert_eq!(
+                EntropyApp::resolve_initial_encoder_visibility(&layout, Some(1), None, false, true),
+                vec![true; side_size * 2],
+                "{name}: shared-control firmware must not reapply its obsolete bit"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_visibility_inherits_for_two_serials_without_rehiding_user_choice() {
+        for (side_size, name) in [(3, "Ergohaven K:03"), (1, "Ergohaven Imperial44")] {
+            let layout = fixed_test_layout(side_size, name);
+            let mut legacy = vec![true; side_size * 2];
+            legacy[side_size] = false;
+            let mut settings = AppSettings::default();
+            let base = format!("vial_1234_{name}");
+            let first = super::super::layout_element_visibility::local_layout_visibility_key(
+                &base,
+                Some("SERIAL-A"),
+            )
+            .unwrap();
+            let second = super::super::layout_element_visibility::local_layout_visibility_key(
+                &base,
+                Some("SERIAL-B"),
+            )
+            .unwrap();
+            assert_ne!(first, second);
+            // Preserve pre-existing layout choices in the first local entry.
+            settings
+                .layout_element_visibility
+                .entry(first.clone())
+                .or_default()
+                .hidden_encoders
+                .insert(0);
+            for device_key in [&first, &second] {
+                let mut visible = EntropyApp::resolve_initial_encoder_visibility(
                     &layout,
                     Some(1),
                     Some(legacy.clone()),
                     false,
-                ),
-                legacy
-            );
-            let mut local = LayoutElementVisibility::default();
-            local.hidden_encoders.insert(0);
-            assert!(migrate_hidden_encoders(&mut legacy, &mut local));
-            assert!(legacy.iter().all(|visible| *visible));
-            assert!(local.hidden_encoders.contains(&(side_size as u8)));
-            assert!(local.hidden_encoders.contains(&0));
-            local.hidden_encoders.remove(&(side_size as u8));
-            assert!(!migrate_hidden_encoders(&mut legacy, &mut local));
-            assert!(!local.hidden_encoders.contains(&(side_size as u8)));
-            assert!(local.hidden_encoders.contains(&0));
-            assert_eq!(
-                EntropyApp::resolve_initial_encoder_visibility(
-                    &layout,
-                    Some(1),
-                    Some(legacy),
-                    false,
-                ),
-                vec![true; side_size * 2]
-            );
+                    true,
+                );
+                assert_eq!(visible, legacy);
+                assert!(migrate_hidden_encoders(
+                    &mut settings,
+                    device_key,
+                    &mut visible
+                ));
+                assert!(visible.iter().all(|value| *value));
+                assert!(settings.layout_element_visibility[device_key]
+                    .hidden_encoders
+                    .contains(&(side_size as u8)));
+                assert_eq!(
+                    legacy[side_size], false,
+                    "shared legacy default must survive"
+                );
+            }
+            assert!(settings.layout_element_visibility[&first]
+                .hidden_encoders
+                .contains(&0));
+            settings
+                .layout_element_visibility
+                .get_mut(&first)
+                .unwrap()
+                .hidden_encoders
+                .remove(&(side_size as u8));
+            let mut visible_again = legacy.clone();
+            assert!(!migrate_hidden_encoders(
+                &mut settings,
+                &first,
+                &mut visible_again
+            ));
+            assert!(visible_again.iter().all(|value| *value));
+            assert!(!settings.layout_element_visibility[&first]
+                .hidden_encoders
+                .contains(&(side_size as u8)));
+            assert!(settings.layout_element_visibility[&second]
+                .hidden_encoders
+                .contains(&(side_size as u8)));
+            // Marker and per-serial choices persist across settings reloads.
+            let saved = serde_json::to_string(&settings).unwrap();
+            let restored: AppSettings = serde_json::from_str(&saved).unwrap();
+            assert!(restored.migrated_fixed_encoder_visibility.contains(&first));
+            assert!(restored.migrated_fixed_encoder_visibility.contains(&second));
         }
     }
 
