@@ -1,3 +1,4 @@
+use super::module_settings_ui::{fixed_encoder_field_number, fixed_encoder_side_size};
 use super::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -11,6 +12,26 @@ struct EncoderVisibilityRowContext {
     content_width: f32,
     height: f32,
     suppress_tooltips: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum EncoderSettingsRow {
+    Visibility(usize, Option<usize>),
+    Field(usize, usize),
+}
+
+// Keep existing hidden choices while moving their control to the local
+// layout editor. Clearing the legacy switches makes the migration one-shot.
+fn migrate_hidden_encoders(legacy: &mut [bool], local: &mut LayoutElementVisibility) -> bool {
+    let mut migrated = false;
+    for (index, visible) in legacy.iter_mut().enumerate() {
+        if !*visible {
+            local.hidden_encoders.insert(index as u8);
+            *visible = true;
+            migrated = true;
+        }
+    }
+    migrated
 }
 
 fn encoder_visibility_side(layout_option: &LayoutOption) -> Option<EncoderVisibilitySide> {
@@ -28,7 +49,26 @@ fn encoder_visibility_copy(
     language: crate::i18n::Language,
     encoder_idx: usize,
     layout_option: Option<&LayoutOption>,
+    fixed_side_size: Option<usize>,
 ) -> (String, String) {
+    if let Some(3) = fixed_side_size {
+        let (label_key, tooltip_key) = if encoder_idx < 3 {
+            (
+                "encoder_settings.left_numbered_encoder",
+                "encoder_settings.left_numbered_encoder_tooltip",
+            )
+        } else {
+            (
+                "encoder_settings.right_numbered_encoder",
+                "encoder_settings.right_numbered_encoder_tooltip",
+            )
+        };
+        let number = (encoder_idx % 3 + 1).to_string();
+        return (
+            crate::i18n::tr_catalog_format(language, label_key, &[("number", &number)]),
+            crate::i18n::tr_catalog_format(language, tooltip_key, &[("number", &number)]),
+        );
+    }
     let (label_key, tooltip_key) = match layout_option.and_then(encoder_visibility_side) {
         Some(EncoderVisibilitySide::Left) => (
             "encoder_settings.left_encoder",
@@ -83,6 +123,44 @@ impl EntropyApp {
             .collect()
     }
 
+    pub(super) fn encoder_settings_rows(&self, layout: &KeyboardLayout) -> Vec<EncoderSettingsRow> {
+        let mut rows = Vec::new();
+        if self.encoder_only_module_settings(layout) {
+            // One pair of controls applies to every physical encoder, independently
+            // of which encoder visibility switches are enabled in the layout.
+            if let Some((group_idx, group)) = self
+                .module_settings
+                .groups
+                .iter()
+                .enumerate()
+                .find(|(_, group)| group.kind == ModuleSettingsGroupKind::Left)
+            {
+                for (field_idx, field) in group.fields.iter().enumerate() {
+                    let name = group.kind.field_base_title(&field.title);
+                    if name.to_ascii_lowercase().ends_with(" interval")
+                        || name.to_ascii_lowercase().ends_with(" steps")
+                    {
+                        if fixed_encoder_field_number(
+                            name,
+                            fixed_encoder_side_size(layout).unwrap_or(0),
+                        ) == Some(1)
+                        {
+                            rows.push(EncoderSettingsRow::Field(group_idx, field_idx));
+                        }
+                    }
+                }
+            }
+        }
+        if !self.encoder_only_module_settings(layout) {
+            rows.extend(
+                Self::encoder_visibility_entries(layout)
+                    .into_iter()
+                    .map(|(idx, option)| EncoderSettingsRow::Visibility(idx, option)),
+            );
+        }
+        rows
+    }
+
     pub(super) fn encoder_visibility_entry_for_module_group(
         layout: &KeyboardLayout,
         group_kind: ModuleSettingsGroupKind,
@@ -125,10 +203,38 @@ impl EntropyApp {
         visibility.resize(encoder_count, !hidden_by_default);
         visibility.truncate(encoder_count);
 
-        if has_saved_choice || !hidden_by_default {
+        // These models now use local Layout -> Show/Hide Keys. A firmware
+        // hide-option bit may still be set by an older Entropy release; do not
+        // reapply it after migrating the old choice into local visibility.
+        let fixed_model =
+            fixed_encoder_side_size(layout).is_some_and(|side_size| encoder_count == side_size * 2);
+        if !fixed_model && (has_saved_choice || !hidden_by_default) {
             Self::apply_encoder_layout_options_to_visibility(layout, packed, &mut visibility);
         }
         visibility
+    }
+
+    pub(super) fn migrate_fixed_encoder_visibility_to_layout(&mut self, layout: &KeyboardLayout) {
+        if !self.encoder_only_module_settings(layout)
+            || self.encoder_visibility.iter().all(|visible| *visible)
+        {
+            return;
+        }
+        let Some(device_key) = self.layout_element_visibility_device_key() else {
+            return;
+        };
+        let local = self
+            .app_settings
+            .layout_element_visibility
+            .entry(device_key)
+            .or_default();
+        if migrate_hidden_encoders(&mut self.encoder_visibility, local) {
+            save_app_settings(&self.app_settings);
+            let device_id = self.encoder_visibility_device_id();
+            if !device_id.is_empty() {
+                save_encoder_visibility(&self.encoder_visibility, &device_id);
+            }
+        }
     }
 
     fn encoder_visibility_device_id(&self) -> String {
@@ -209,6 +315,11 @@ impl EntropyApp {
             self.app_settings.language,
             encoder_idx,
             layout_option.as_ref(),
+            self.layout.as_ref().and_then(|layout| {
+                self.encoder_only_module_settings(layout)
+                    .then(|| fixed_encoder_side_size(layout))
+                    .flatten()
+            }),
         );
         let mut switch_enabled = self.encoder_visibility[encoder_idx];
         crate::ui_style::settings_list_row_with_tooltip(
@@ -241,20 +352,17 @@ impl EntropyApp {
     ) {
         let lang = self.app_settings.language;
         let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
-        let encoders_content_width = metrics.settings_content_width();
-        let encoders_row_height = metrics.settings_row_height();
-        let encoders_top_padding = metrics.value(4.0);
-        let entries = self
+        let rows = self
             .layout
             .as_ref()
-            .map(Self::encoder_visibility_entries)
+            .map(|layout| self.encoder_settings_rows(layout))
             .unwrap_or_default();
-        let visibility_len = entries
-            .iter()
-            .map(|(encoder_idx, _)| *encoder_idx)
-            .max()
-            .map(|idx| idx + 1)
-            .unwrap_or(0);
+        // The scoped page has no visibility rows, but the saved visibility
+        // vector is still needed for migration to Layout -> Show/Hide Keys.
+        let visibility_len = self
+            .layout
+            .as_ref()
+            .map_or(0, KeyboardLayout::encoder_count);
         self.ensure_encoder_visibility_len(visibility_len);
 
         crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
@@ -267,13 +375,23 @@ impl EntropyApp {
                 );
                 ui.add_space(6.0);
                 ui.label(
-                    RichText::new(crate::i18n::tr(lang, crate::i18n::Key::EncodersDescription))
-                        .size(13.0)
-                        .color(app_muted_text(dark)),
+                    RichText::new(
+                        if self
+                            .layout
+                            .as_ref()
+                            .is_some_and(|layout| self.encoder_only_module_settings(layout))
+                        {
+                            crate::i18n::tr_catalog(lang, "encoder_settings.controls_description")
+                        } else {
+                            crate::i18n::tr(lang, crate::i18n::Key::EncodersDescription)
+                        },
+                    )
+                    .size(13.0)
+                    .color(app_muted_text(dark)),
                 );
                 ui.add_space(24.0);
 
-                if entries.is_empty() {
+                if rows.is_empty() {
                     crate::ui_style::modal_empty_state(
                         ui,
                         crate::i18n::tr(lang, crate::i18n::Key::EncodersUnavailable),
@@ -282,26 +400,52 @@ impl EntropyApp {
                     return;
                 }
 
-                crate::ui_style::modal_content(
+                let list = allocate_adaptive_settings_list_viewport(
                     ui,
-                    crate::ui_style::ModalLayout::new(encoders_content_width)
-                        .with_top_padding(encoders_top_padding),
-                    |ui| {
-                        let row = EncoderVisibilityRowContext {
-                            content_width: encoders_content_width,
-                            height: encoders_row_height,
-                            suppress_tooltips: false,
-                        };
-                        for (encoder_idx, option_idx) in entries.iter().copied() {
-                            self.draw_encoder_visibility_setting_row(
-                                ui,
-                                row,
-                                encoder_idx,
-                                option_idx,
-                            );
-                        }
-                    },
+                    "encoder_settings",
+                    metrics,
+                    rows.len(),
+                    0.0,
                 );
+                crate::ui_style::allocate_ui_at_rect(ui, list.content_rect, |ui| {
+                    ui.set_clip_rect(list.viewport);
+                    ui.set_min_size(list.content_rect.size());
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    for row_idx in list.first_visible_row..list.last_visible_row {
+                        match rows[row_idx] {
+                            EncoderSettingsRow::Visibility(encoder_idx, option_idx) => {
+                                self.draw_encoder_visibility_setting_row(
+                                    ui,
+                                    EncoderVisibilityRowContext {
+                                        content_width: list.row_content_width,
+                                        height: list.row_height,
+                                        suppress_tooltips: list.suppress_tooltips,
+                                    },
+                                    encoder_idx,
+                                    option_idx,
+                                );
+                            }
+                            EncoderSettingsRow::Field(group_idx, field_idx) => self
+                                .draw_module_settings_field_row(
+                                    ui,
+                                    group_idx,
+                                    field_idx,
+                                    list.row_content_width,
+                                    list.row_height,
+                                    list.suppress_tooltips,
+                                ),
+                        }
+                    }
+                });
+                if list.has_scrollbar {
+                    crate::ui_style::paint_floating_scrollbar_handle(
+                        ui,
+                        list.track_rect,
+                        list.handle_height,
+                        list.scroll_ratio,
+                        list.track_hovered,
+                    );
+                }
             });
         });
     }
@@ -396,6 +540,52 @@ mod tests {
             ),
             vec![true]
         );
+    }
+
+    #[test]
+    fn legacy_fixed_encoder_hiding_moves_to_layout_once() {
+        for (side_size, name) in [(3, "Ergohaven K:03"), (1, "Ergohaven Imperial44")] {
+            let mut layout = layout_with_encoder_hide_option();
+            layout.name = name.to_owned();
+            layout.encoders = (0..side_size * 2)
+                .map(|idx| PhysicalEncoder {
+                    encoder_idx: idx as u8,
+                    ..layout.encoders[0].clone()
+                })
+                .collect();
+            // Firmware's former Hide encoder option must not overwrite the
+            // local visibility saved by a previous Entropy version.
+            let mut legacy = vec![true; side_size * 2];
+            legacy[side_size] = false;
+            assert_eq!(
+                EntropyApp::resolve_initial_encoder_visibility(
+                    &layout,
+                    Some(1),
+                    Some(legacy.clone()),
+                    false,
+                ),
+                legacy
+            );
+            let mut local = LayoutElementVisibility::default();
+            local.hidden_encoders.insert(0);
+            assert!(migrate_hidden_encoders(&mut legacy, &mut local));
+            assert!(legacy.iter().all(|visible| *visible));
+            assert!(local.hidden_encoders.contains(&(side_size as u8)));
+            assert!(local.hidden_encoders.contains(&0));
+            local.hidden_encoders.remove(&(side_size as u8));
+            assert!(!migrate_hidden_encoders(&mut legacy, &mut local));
+            assert!(!local.hidden_encoders.contains(&(side_size as u8)));
+            assert!(local.hidden_encoders.contains(&0));
+            assert_eq!(
+                EntropyApp::resolve_initial_encoder_visibility(
+                    &layout,
+                    Some(1),
+                    Some(legacy),
+                    false,
+                ),
+                vec![true; side_size * 2]
+            );
+        }
     }
 
     #[test]

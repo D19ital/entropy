@@ -947,6 +947,8 @@ impl EntropyApp {
                         ),
                         self.hide_modular_encoders_by_default(layout),
                     );
+                    let layout = layout.clone();
+                    self.migrate_fixed_encoder_visibility_to_layout(&layout);
                 }
                 self.deferred_device_load
                     .set_section_status(DeferredLoadSection::Modules, DeferredLoadStatus::Loaded);
