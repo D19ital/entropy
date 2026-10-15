@@ -9,19 +9,14 @@ source "$ROOT/scripts/macos_stable_signing.sh"
 KEYCHAIN="$TEST_ROOT/signing.keychain-db"
 
 cleanup() {
-    local status=0 keychain
-    local original=()
+    local status=0
     if [[ -f "$TEST_ROOT/keychains.original" ]]; then
-        while read -r keychain; do
-            keychain="${keychain//\"/}"
-            [[ -z "$keychain" ]] || original+=("$keychain")
-        done < "$TEST_ROOT/keychains.original"
-        security list-keychains -d user -s "${original[@]}" >/dev/null 2>&1 || status=1
+        macos_set_test_keychain_search_list "$TEST_ROOT/keychains.original" >/dev/null 2>&1 || status=1
     fi
     if [[ -e "$KEYCHAIN" ]]; then
         security delete-keychain "$KEYCHAIN" >/dev/null 2>&1 || status=1
     fi
-    rm -f "$TEST_ROOT/certificate.p12" "$TEST_ROOT/keychain.password" "$KEYCHAIN"
+    rm -f "$TEST_ROOT/certificate.p12" "$TEST_ROOT/keychain.password" "$KEYCHAIN" "$TEST_ROOT/signing-diagnostic"
     return "$status"
 }
 if [[ "${1:-}" == cleanup ]]; then cleanup; exit; fi
@@ -32,11 +27,21 @@ if [[ "${1:-}" == cleanup ]]; then cleanup; exit; fi
 CERTIFICATE=50B8A2614631D0EE1705213D19D07A52C921D665
 export CODESIGN_IDENTITY="$CERTIFICATE" MACOS_SIGNING_CERTIFICATE_SHA1="$CERTIFICATE"
 export REQUIRE_STABLE_SIGNING=1 TARGET=aarch64-apple-darwin CODESIGN_KEYCHAIN="$KEYCHAIN"
-for variant in A B; do
-    binary="$TEST_ROOT/build-$variant/$TARGET/release/entropy"
-    [[ -x "$binary" && "$(lipo -archs "$binary")" == arm64 ]]
-done
-! cmp -s "$TEST_ROOT/build-A/$TARGET/release/entropy" "$TEST_ROOT/build-B/$TARGET/release/entropy"
+MODE="${1:-pair}"
+[[ "$MODE" == pair || "$MODE" == probe ]] || { echo 'Expected pair, probe or cleanup' >&2; exit 1; }
+if [[ "$MODE" == probe ]]; then
+    [[ "${GITHUB_REPOSITORY:-}" == D19ital/entropy &&
+       "${GITHUB_REF:-}" == refs/heads/test/macos-stable-signing ]] || exit 1
+    mkdir -p "$TEST_ROOT"
+    # Diagnostic only, never run: no compilation or Entropy app/DMG output.
+    cp /usr/bin/true "$TEST_ROOT/signing-diagnostic"
+else
+    for variant in A B; do
+        binary="$TEST_ROOT/build-$variant/$TARGET/release/entropy"
+        [[ -x "$binary" && "$(lipo -archs "$binary")" == arm64 ]]
+    done
+    ! cmp -s "$TEST_ROOT/build-A/$TARGET/release/entropy" "$TEST_ROOT/build-B/$TARGET/release/entropy"
+fi
 [[ ! -e "$KEYCHAIN" && ! -e "$TEST_ROOT/keychains.original" ]]
 umask 077
 security list-keychains -d user > "$TEST_ROOT/keychains.original"
@@ -63,6 +68,15 @@ unset MACOS_TEST_CERTIFICATE_P12_BASE64 MACOS_TEST_CERTIFICATE_PASSWORD KEYCHAIN
 # Pin by SHA-1 of the imported certificate, then codesign selects by hash in this keychain.
 security find-certificate -a -Z "$KEYCHAIN" | grep -Fx "SHA-1 hash: $CERTIFICATE" >/dev/null
 
+if [[ "$MODE" == probe ]]; then
+    macos_probe_test_keychain "$TEST_ROOT/signing-diagnostic" "$CERTIFICATE" \
+        "$KEYCHAIN" "$TEST_ROOT/keychains.original"
+    cleanup
+    trap - EXIT
+    exit 0
+fi
+# --keychain selects the identity, but chain resolution also needs the user search list.
+macos_set_test_keychain_search_list "$TEST_ROOT/keychains.original" "$KEYCHAIN"
 mkdir -p "$TEST_ROOT/artifacts"
 for variant in A B; do
     export CARGO_TARGET_DIR="$TEST_ROOT/build-$variant"

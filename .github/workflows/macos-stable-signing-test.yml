@@ -13,12 +13,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  signing-probe:
+    # Fast diagnosis only; deliberately no Rust toolchain, Cargo or artifact upload.
+    if: >-
+      github.repository == 'D19ital/entropy' &&
+      github.ref == 'refs/heads/test/macos-stable-signing' &&
+      vars.MACOS_TEST_SIGNING_READY == '1' &&
+      contains(github.event.head_commit.message, '[macos-signing-probe]')
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - name: Set isolated temporary directory
+        run: printf 'TEST_ROOT=%s/entropy-signing-probe-%s-%s\n' "$RUNNER_TEMP" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Probe explicit keychain before and after search-list registration (diagnostic only)
+        env:
+          MACOS_TEST_SIGNING_READY: ${{ vars.MACOS_TEST_SIGNING_READY }}
+          MACOS_TEST_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_TEST_CERTIFICATE_P12_BASE64 }}
+          MACOS_TEST_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_TEST_CERTIFICATE_PASSWORD }}
+        run: bash scripts/sign_macos_test_pair.sh probe
+      - name: Always restore keychain list and remove private material and diagnostic copy
+        if: always()
+        run: bash scripts/sign_macos_test_pair.sh cleanup
+
   signed-pair:
     # Initial publication is inert: READY is unset, and the commit must explicitly opt in.
     # Only the operator sets READY after secrets and workflow review are complete.
     if: >-
       github.repository == 'D19ital/entropy' &&
+      github.ref == 'refs/heads/test/macos-stable-signing' &&
       vars.MACOS_TEST_SIGNING_READY == '1' &&
+      !contains(github.event.head_commit.message, '[macos-signing-probe]') &&
       contains(github.event.head_commit.message, '[macos-signing-test]')
     runs-on: macos-15
     timeout-minutes: 60

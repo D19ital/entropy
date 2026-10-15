@@ -126,4 +126,65 @@ expect_success \
 	"$certificate_sha1" \
 	"$bundle_id"
 
-echo "macOS stable signing unit tests passed (MOCK codesign; no real macOS signing)"
+# Security is unavailable on Linux: assert exact argv, including paths with spaces.
+mock_root="$(mktemp -d "${TMPDIR:-/tmp}/entropy-keychain-mock.XXXXXX")"
+trap 'rm -rf "$mock_root"' EXIT
+printf '    "/Users/test/login.keychain-db"\n    "/path with spaces/custom.keychain-db"\n' > "$mock_root/original"
+security() {
+    [[ "$*" != *default-keychain* && "$*" != *trusted-cert* ]] || fail 'trust/default keychain mutation'
+    printf '<%s>' "$@" >> "$mock_root/security.log"
+    printf '\n' >> "$mock_root/security.log"
+}
+macos_set_test_keychain_search_list "$mock_root/original" "$mock_root/temp signing.keychain-db"
+macos_set_test_keychain_search_list "$mock_root/original"
+expected="<list-keychains><-d><user><-s></Users/test/login.keychain-db></path with spaces/custom.keychain-db><$mock_root/temp signing.keychain-db>"$'\n''<list-keychains><-d><user><-s></Users/test/login.keychain-db></path with spaces/custom.keychain-db>'
+[[ "$(<"$mock_root/security.log")" == "$expected" ]] || fail 'registration/restoration changed original paths'
+
+# The probe must try the SAME explicit-keychain command on both sides of registration.
+codesign() {
+    printf '<%s>' "$@" >> "$mock_root/codesign.log"
+    printf '\n' >> "$mock_root/codesign.log"
+    case "$1" in
+        --force)
+            if [[ ! -f "$mock_root/registered" ]]; then
+                echo 'The specified item could not be found in the keychain.' >&2
+                return 1
+            fi ;;
+        --verify)
+            [[ "$*" == *--strict* ]] || return 9
+            [[ "$*" == *--deep* || "$*" == *'-R='* ]] || return 9 ;;
+        -dv) printf '%s\n' "$self_signed_details" >&2 ;;
+        -d) printf '%s\n' "designated => certificate root = H\"$certificate_sha1\" and identifier \"com.ergohaven.signing-diagnostic\"" >&2 ;;
+        *) return 8 ;;
+    esac
+}
+security() {
+    [[ "$1" == list-keychains && "$2" == -d && "$3" == user && "$4" == -s ]] || return 7
+    [[ "${5:-}" == /Users/test/login.keychain-db && "${6:-}" == '/path with spaces/custom.keychain-db' ]] || return 6
+    if [[ $# == 6 ]]; then
+        rm -f "$mock_root/registered"
+    else
+        [[ $# == 7 && "$7" == "$mock_root/temp signing.keychain-db" ]] || return 5
+        touch "$mock_root/registered"
+    fi
+}
+# Simulate create-keychain having automatically registered it: probe must reset first.
+touch "$mock_root/registered"
+macos_probe_test_keychain "$mock_root/diagnostic" "$certificate_sha1" \
+    "$mock_root/temp signing.keychain-db" "$mock_root/original" > "$mock_root/probe.log"
+[[ "$(<"$mock_root/probe.log")" == *'before registration: sign status=1; The specified item could not be found in the keychain.'* ]] || fail 'missing before error evidence'
+[[ "$(<"$mock_root/probe.log")" == *'after registration: sign status=0'* ]] || fail 'missing after evidence'
+[[ "$(<"$mock_root/probe.log")" == *'after registration: strict requirement verification=passed'* ]] || fail 'missing strict verification'
+sign_calls=()
+while IFS= read -r line; do
+    [[ "$line" != '<--force>'* ]] || sign_calls+=("$line")
+done < "$mock_root/codesign.log"
+[[ ${#sign_calls[@]} == 2 && "${sign_calls[0]}" == "${sign_calls[1]}" && "${sign_calls[0]}" == *'<--keychain>'* ]] || fail 'probe did not retry identical explicit-keychain signing'
+
+# A failed retry must stay a job failure, not be hidden by diagnostic printing.
+rm -f "$mock_root/registered"
+security() { return 0; }
+expect_failure 'probe swallowed retry failure' macos_probe_test_keychain \
+    "$mock_root/diagnostic" "$certificate_sha1" "$mock_root/temp signing.keychain-db" "$mock_root/original"
+
+echo "macOS stable signing unit tests passed (MOCK codesign/security; no real macOS signing)"
