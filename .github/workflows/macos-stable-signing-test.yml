@@ -23,9 +23,10 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 60
     env:
-      TEST_ROOT: ${{ runner.temp }}/entropy-macos-stable-signing-${{ github.run_id }}-${{ github.run_attempt }}
       MACOSX_DEPLOYMENT_TARGET: '11.0'
     steps:
+      - name: Set isolated temporary directory
+        run: printf 'TEST_ROOT=%s/entropy-macos-stable-signing-%s-%s\n' "$RUNNER_TEMP" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
